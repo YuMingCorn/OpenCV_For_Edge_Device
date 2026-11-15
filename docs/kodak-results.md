@@ -5,11 +5,11 @@
 ## 做法
 
 1. 每個模組各有一支 `test_kodak_<module>`。它對 24 張影像各跑一遍運算，計算輸出的 FNV-1a 雜湊，與 `tests/golden/kodak_<module>.txt` 比對。同一份雜湊清單在 Windows（LLVM-MinGW）、WSL（GCC x86-64）與 `qemu-aarch64` 下都通過，所以各平台的輸出逐 byte 相同。
-2. 加上 `--dump <目錄>` 時，測試把每個輸出存成 `<影像>_<運算>.png`。六個模組倒進同一個目錄。
+2. 加上 `--dump <目錄>` 時，測試把每個輸出存成 `<影像>_<運算>.png`。七個模組倒進同一個目錄。
 3. `tools/compare_opencv.py --dump <目錄>` 讀入這些 PNG。每個運算用我們自己輸出的輸入餵給 OpenCV（例如 `cv2.Sobel` 的輸入是我們輸出的灰階圖），所以某一步的差異不會傳到下一步。最大差異超過容許誤差就以非零狀態結束。
 
 ```sh
-for m in phase1 morph hist color2 area f32; do
+for m in phase1 morph hist color2 area median f32; do
   build/test_kodak_$m --dir datasets/kodak --manifest tests/golden/kodak_$m.txt --dump dump
 done
 python3 tools/compare_opencv.py --dump dump
@@ -19,7 +19,7 @@ python3 tools/compare_opencv.py --dump dump
 
 ## 結果
 
-OpenCV 4.10.0，24 張影像，34 個運算，全部在容許誤差內。「差異像素」是所有影像的樣本中與 OpenCV 不同的比例。
+OpenCV 4.10.0，24 張影像，38 個運算，全部在容許誤差內。「差異像素」是所有影像的樣本中與 OpenCV 不同的比例。
 
 | 運算 | 模組 | 最大差異 | 容許 | 差異像素 % | 對照的 OpenCV 呼叫 |
 |---|---|---|---|---|---|
@@ -52,9 +52,13 @@ OpenCV 4.10.0，24 張影像，34 個運算，全部在容許誤差內。「差�
 | `area_quarter` | area | 1 | 1 | 3.0672 | `INTER_AREA` |
 | `area_nonint` | area | 1 | 1 | 0.0009 | `INTER_AREA` |
 | `area_up_1_5` | area | 0 | 1 | 0 | `INTER_AREA` |
+| `median3` | median | 0 | 0 | 0 | `cv2.medianBlur` 3 |
+| `median5` | median | 0 | 0 | 0 | `cv2.medianBlur` 5 |
+| `gray_median7` | median | 0 | 0 | 0 | `cv2.medianBlur` 7（我們的灰階） |
+| `gray_median15` | median | 0 | 0 | 0 | `cv2.medianBlur` 15（我們的灰階） |
 
 ## 解讀
 
-- 逐 byte 相同（最大差異 0）的運算：色彩順序轉換、查表、濾波（box、gauss、Sobel）、翻轉、整數倍的 nearest、形態學、直方圖等化、Otsu、RGB 轉 HSV、半倍縮小的 `INTER_AREA`。`equalize`、`half_linear`、`area_up_1_5` 的容許誤差是 1，實測也是 0。
+- 逐 byte 相同（最大差異 0）的運算：色彩順序轉換、查表、濾波（box、gauss、Sobel）、翻轉、整數倍的 nearest、中值濾波、形態學、直方圖等化、Otsu、RGB 轉 HSV、半倍縮小的 `INTER_AREA`。`equalize`、`half_linear`、`area_up_1_5` 的容許誤差是 1，實測也是 0。
 - 差 1 個階的運算都是定點捨入與 OpenCV 的捨入方式不同：灰階、`convertScaleAbs`、非整數倍的雙線性縮放、HSV 轉回 RGB、YUV、三分之一與四分之一的 `INTER_AREA`。差異都在容許範圍內，沒有放寬任何容許誤差。
 - 每個運算的容許誤差寫在 `tools/opencv_ref/*.py`。
