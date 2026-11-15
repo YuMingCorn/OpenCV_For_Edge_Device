@@ -27,7 +27,7 @@
 ### 下載與建置
 
 ```sh
-git clone https://github.com/YuMingCorn/opencv_c.git
+git clone https://github.com/YuMingCorn/OpenCV_For_Edge_Device.git opencv_c
 cd opencv_c
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
@@ -41,7 +41,7 @@ ctest --test-dir build --output-on-failure   # 沒有 Kodak 資料集時，Kodak
 
 ### 放進自己的 CMake 專案
 
-把這個 repo 放進專案（例如 `external/opencv_c`，可用 `git submodule add`），再在 `CMakeLists.txt` 加上：
+把這個 repo 放進專案的 `external/opencv_c`（例如 `git submodule add https://github.com/YuMingCorn/OpenCV_For_Edge_Device.git external/opencv_c`），再在 `CMakeLists.txt` 加上：
 
 ```cmake
 # PC 或樹莓派：需要讀寫圖檔
