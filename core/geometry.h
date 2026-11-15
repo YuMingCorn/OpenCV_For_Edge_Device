@@ -9,6 +9,12 @@ enum FlipCodes { FLIP_VERTICAL = 0, FLIP_HORIZONTAL = 1, FLIP_BOTH = -1 };
 // row order, FLIP_HORIZONTAL reverses pixel order within each row.
 void flip(struct Mat *dst, const struct Mat *src, int flip_code);
 
+// Copies the region of src whose top-left pixel is (x, y) into dst. The region
+// size is the size of dst, and it must lie inside src. Works for any type;
+// src and dst must have the same type and distinct buffers. Use it to cut a
+// region of interest out of a camera frame before further processing.
+void crop(struct Mat *dst, const struct Mat *src, int x, int y);
+
 enum InterpolationFlags { INTER_NEAREST, INTER_LINEAR, INTER_AREA };
 
 // Resizes src into dst (same type, CV_8UC1/3/4). The target size is the size

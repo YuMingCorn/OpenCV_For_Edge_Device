@@ -10,12 +10,15 @@
 | `color.h` | `cvt_color`（HSV、YUV） | RGB／BGR 與 HSV（H 0～179）互轉；RGB／BGR 與 YUV（JFIF 全範圍 BT.601）互轉 |
 | `pixel.h` | `threshold` | BINARY、BINARY_INV、TRUNC、TOZERO、TOZERO_INV |
 | `pixel.h` | `mat_lut` | 256 項查表 |
+| `pixel.h` | `absdiff` | 兩張影像逐通道相減取絕對值，用於畫面差分（動態偵測） |
 | `pixel.h` | `convert_scale`、`convert_scale_abs` | `src * alpha_q8 / 256 + beta`，結果飽和到 0～255 |
 | `filter.h` | `box_filter`、`gaussian_blur`、`sobel` | 邊界一律 BORDER_REFLECT_101；以逐列滾動的環形緩衝區運作，暫存記憶體只與 `ksize` 和列寬有關；Sobel 輸入灰階、輸出 `CV_16SC1` |
 | `morph.h` | `erode`、`dilate`、`morph_open`、`morph_close` | 矩形結構元素，`ksize` 為 1～255 的奇數；視窗超出影像的部分不計入 |
 | `hist.h` | `calc_hist`、`equalize_hist` | 256 階直方圖與直方圖等化 |
 | `hist.h` | `otsu_threshold`、`otsu_threshold_hist` | Otsu 門檻；判準以精確的整數與分數比較，沒有浮點捨入造成的平手 |
+| `hist.h` | `nonzero_stats` | 二值影像的非零像素數、外接矩形與重心座標總和，用來判斷有沒有物體、在哪裡、多大 |
 | `geometry.h` | `flip` | 水平、垂直、雙向翻轉 |
+| `geometry.h` | `crop` | 從大圖複製出一塊矩形區域（任何型別），區域大小由 dst 決定 |
 | `geometry.h` | `resize` | `INTER_NEAREST`、`INTER_LINEAR`（半像素中心）與 `INTER_AREA`（整數面積權重，放大縮小皆可） |
 | `convert_f32.h` | `convert_to` | `CV_8UCn` 與 `CV_32FCn` 互轉並套用 `alpha`、`beta`；需要 `IMPROC_ENABLE_FLOAT` |
 | `mat.h` | `alloc_mat`、`mat_init` | `alloc_mat` 從堆積配置；`mat_init` 包裝呼叫端的緩衝區，不配置記憶體 |
@@ -31,6 +34,22 @@ mat_write("binary.png", bin);
 free_mat(&bin);
 free_mat(&gray);
 free_mat(&src);
+```
+
+動態偵測：`prev`、`curr` 是相機前後兩張 QVGA 灰階畫面（`CV_8UC1`，320×240），只看中央 160×120 的區域：
+
+```c
+crop(roi_prev, prev, 80, 60);                   // roi_*、diff、mask 都是 120×160 的 CV_8UC1
+crop(roi_curr, curr, 80, 60);
+absdiff(diff, roi_curr, roi_prev);
+threshold(mask, diff, 30, 255, THRESH_BINARY);  // 亮度變化超過 30 的像素
+struct NonzeroStats s;
+nonzero_stats(&s, mask);
+if (s.count > 200) {                            // 變動的像素夠多才算有動靜
+    int cx = (int)((s.sum_x + s.count / 2) / s.count);  // 重心，四捨五入
+    int cy = (int)((s.sum_y + s.count / 2) / s.count);
+    // 物體範圍 (s.x_min, s.y_min)～(s.x_max, s.y_max)，座標相對於 ROI
+}
 ```
 
 ## 建置與測試
@@ -62,7 +81,7 @@ ctest --test-dir build --output-on-failure
 比對腳本需要 Python 3、`opencv-python` 與 `numpy`。先用各測試的 `--dump` 輸出影像，再讓腳本逐運算算出與 OpenCV 的最大差異：
 
 ```sh
-for m in phase1 morph hist color2 area f32; do
+for m in phase1 morph hist color2 area edge f32; do
   build/test_kodak_$m --dir datasets/kodak --manifest tests/golden/kodak_$m.txt --dump dump
 done
 python3 tools/compare_opencv.py --dump dump

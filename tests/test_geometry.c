@@ -3,6 +3,7 @@
 
 #include "geometry.h"
 #include "test_alloc_util.h"
+#include "test_expect_assert.h"
 #include "test_mat_util.h"
 
 static void flip_bytes(int flip_code, int type, int rows, int cols,
@@ -417,7 +418,96 @@ static void test_area_misuse_asserts(void) {
     free_mat(&big);
 }
 
+static void test_crop_gray(void) {
+    const uchar in[] = {
+        0, 1, 2,  3,  //
+        4, 5, 6,  7,  //
+        8, 9, 10, 11, //
+    };
+    const uchar mid[]    = {5, 6, 9, 10};
+    const uchar corner[] = {11};
+    struct Mat *src      = mat_from_bytes(3, 4, CV_8UC1, in);
+    struct Mat *a        = alloc_mat(2, 2, CV_8UC1);
+    struct Mat *b        = alloc_mat(1, 1, CV_8UC1);
+    struct Mat *all      = alloc_mat(3, 4, CV_8UC1);
+    crop(a, src, 1, 1);
+    CHECK_MAT_BYTES(a, mid);
+    crop(b, src, 3, 2); // bottom-right pixel, region touches both edges
+    CHECK_MAT_BYTES(b, corner);
+    crop(all, src, 0, 0);
+    CHECK_MAT_BYTES(all, in);
+    free_mat(&src);
+    free_mat(&a);
+    free_mat(&b);
+    free_mat(&all);
+}
+
+static void test_crop_c3_and_s16(void) {
+    const uchar in3[]  = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
+    const uchar out3[] = {4, 5, 6, 10, 11, 12};
+    struct Mat *src3   = mat_from_bytes(2, 2, CV_8UC3, in3);
+    struct Mat *dst3   = alloc_mat(2, 1, CV_8UC3);
+    crop(dst3, src3, 1, 0);
+    CHECK_MAT_BYTES(dst3, out3);
+
+    const int16_t in16[]  = {-1, 300, -32768, 32767, 7, -7};
+    const int16_t out16[] = {-32768, 32767};
+    struct Mat   *src16   = mat_from_bytes(3, 2, CV_16SC1, in16);
+    struct Mat   *dst16   = alloc_mat(1, 2, CV_16SC1);
+    crop(dst16, src16, 0, 1);
+    CHECK_MAT_BYTES(dst16, out16);
+    free_mat(&src3);
+    free_mat(&dst3);
+    free_mat(&src16);
+    free_mat(&dst16);
+}
+
+static void test_crop_width_sweep(void) {
+    struct Mat *src = alloc_mat(5, 70, CV_8UC4);
+    fill_pattern(src, 3);
+    for (int w = 0; w <= 65; w++) {
+        for (int x = 0; x + w <= 70; x += 1 + w / 8) {
+            struct Mat *dst = alloc_mat(3, w, CV_8UC4);
+            crop(dst, src, x, 2);
+            for (int yy = 0; yy < 3; yy++) {
+                for (int xx = 0; xx < w; xx++) {
+                    const uchar *p = mat_at(src, 2 + yy, x + xx);
+                    const uchar *q = mat_at(dst, yy, xx);
+                    CHECK_EQ_BYTES(q, p, 4);
+                }
+            }
+            free_mat(&dst);
+        }
+    }
+    free_mat(&src);
+}
+
+static void test_crop_rejects_misuse(void) {
+    struct Mat *src = alloc_mat(4, 5, CV_8UC1);
+    struct Mat *dst = alloc_mat(2, 3, CV_8UC1);
+    struct Mat *big = alloc_mat(5, 5, CV_8UC1);
+    struct Mat *rgb = alloc_mat(2, 3, CV_8UC3);
+    EXPECT_ASSERT(crop(dst, src, -1, 0));         // left of the image
+    EXPECT_ASSERT(crop(dst, src, 0, -1));         // above the image
+    EXPECT_ASSERT(crop(dst, src, 3, 0));          // 3 + 3 > 5 columns
+    EXPECT_ASSERT(crop(dst, src, 0, 3));          // 3 + 2 > 4 rows
+    EXPECT_ASSERT(crop(dst, src, 2147483647, 0)); // x + cols must not wrap
+    EXPECT_ASSERT(crop(big, src, 0, 0));          // dst taller than src
+    EXPECT_ASSERT(crop(rgb, src, 0, 0));          // type differs
+    EXPECT_ASSERT(crop(src, src, 0, 0));          // in place
+    EXPECT_ASSERT(crop(NULL, src, 0, 0));
+    EXPECT_ASSERT(crop(dst, NULL, 0, 0));
+    free_mat(&src);
+    free_mat(&dst);
+    free_mat(&big);
+    free_mat(&rgb);
+}
+
 int main(void) {
+    RUN_TEST(test_crop_gray);
+    RUN_TEST(test_crop_c3_and_s16);
+    RUN_TEST(test_crop_width_sweep);
+    RUN_TEST(test_crop_rejects_misuse);
     RUN_TEST(test_flip_c3);
     RUN_TEST(test_flip_gray);
     RUN_TEST(test_flip_rgba);
