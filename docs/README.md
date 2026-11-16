@@ -17,7 +17,7 @@
 
 ![模組與建置目標](01-architecture.svg)
 
-左半部是 CMake 目標。`improc_core` 靜態函式庫是可攜核心：七個運算模組（color、pixel、filter、morph、hist、geometry、convert_f32）加上 `mat` 與 `utils`，不含 stdio、pthread 與檔案 IO。`improc` 靜態函式庫在它之上加 `mat_io.c`（圖檔讀寫，只有這個檔案 include 第三方的 stb），並連結 Threads。`demo`、`bench_gray`、測試與 Kodak 測試都連結 `improc`。`improc.h` 是 umbrella header，負責 include 其餘 header；`improc_internal.h` 只給核心與測試使用，不在 umbrella 內。右半部列出各檔案 `#include` 的 header。
+左半部是 CMake 目標。`improc_core` 靜態函式庫是可攜核心：八個運算模組（color、pixel、filter、morph、hist、features2d、geometry、convert_f32）加上 `mat` 與 `utils`，不含 stdio、pthread 與檔案 IO。`improc` 靜態函式庫在它之上加 `mat_io.c`（圖檔讀寫，只有這個檔案 include 第三方的 stb），並連結 Threads。`demo`、`bench_gray`、測試與 Kodak 測試都連結 `improc`。`improc.h` 是 umbrella header，負責 include 其餘 header；`improc_internal.h` 只給核心與測試使用，不在 umbrella 內。右半部列出各檔案 `#include` 的 header。
 
 對應檔案：`CMakeLists.txt`、`core/improc.h`、`core/improc_internal.h`。
 

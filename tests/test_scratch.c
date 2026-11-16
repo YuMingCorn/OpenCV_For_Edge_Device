@@ -235,6 +235,19 @@ static void test_alloc_failure_hist(void) {
     free_mat(&dst);
 }
 
+static void test_alloc_failure_features(void) {
+    static struct KeyPoint kp[64];
+    struct Mat            *src = alloc_mat(50, 61, CV_8UC1);
+    fill_pattern(src, 7);
+    for (int y = 0; y < 50; y += 5) { // strong corners for FAST
+        memset(mat_row(src, y), 255, 61);
+    }
+    CHECK((fast_detect(NULL, 0, src, 10, 1)) > 0);
+    CHECK_ALLOC_FAILURES((void)fast_detect(kp, 64, src, 10, 1), 1);
+    CHECK_ALLOC_FAILURES((void)fast_detect(kp, 64, src, 10, 0), 0);
+    free_mat(&src);
+}
+
 // calc_hist and otsu_threshold_hist take a caller-owned histogram and need no
 // scratch, so they work with an allocator that always fails.
 static void *null_alloc(size_t size) {
@@ -275,6 +288,7 @@ int main(void) {
     RUN_TEST(test_alloc_failure_morph);
     RUN_TEST(test_alloc_failure_geometry);
     RUN_TEST(test_alloc_failure_hist);
+    RUN_TEST(test_alloc_failure_features);
     RUN_TEST(test_hist_needs_no_scratch);
     return test_finish();
 }
