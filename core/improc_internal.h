@@ -28,6 +28,20 @@ size_t improc_scratch_add(size_t a, size_t b);
 // them. All ops use it, so allocation failure behaves the same everywhere.
 void improc_scratch_check(void *const blocks[], size_t count);
 
+// ---- ORB pieces (features2d.c), exposed for tests --------------------------
+
+struct Mat;
+
+// The 256 BRIEF test pairs (x1, y1, x2, y2) that orb_compute rotates.
+extern const signed char improc_orb_pattern[256][4];
+
+// Harris measure that orb_detect ranks by, at (x, y); needs 4 pixels of margin.
+int64_t improc_harris_measure(const struct Mat *src, int x, int y);
+
+// Orientation step that orb_detect assigns at (x, y); needs 15 pixels of
+// margin.
+int32_t improc_orb_angle(const struct Mat *src, int x, int y);
+
 // ---- 128-bit helpers for the exact Otsu comparison (hist.c) ----------------
 
 struct improc_u128 {
