@@ -39,4 +39,22 @@ uchar otsu_threshold_hist(const uint32_t hist[256]);
 // threshold(dst, src, t, 255, THRESH_BINARY) to binarize.
 uchar otsu_threshold(const struct Mat *src);
 
+// Summary of the nonzero pixels of a binary (or any CV_8UC1) image: how many
+// there are, the smallest box that holds them, and the coordinate sums for the
+// centroid. Use it after threshold to turn a mask into a decision: "is there
+// an object", "where is it", "how big is it".
+struct NonzeroStats {
+    uint32_t count; // pixels with value != 0
+    // Inclusive bounding box. When count == 0: x_min = y_min = 0 and
+    // x_max = y_max = -1, so x_max - x_min + 1 is the width (0) in every case.
+    int x_min, y_min, x_max, y_max;
+    // Sums of the x and y coordinates of the counted pixels. The centroid is
+    // sum / count; (sum_x + count / 2) / count rounds it half up. At most
+    // 2^24 pixels, so each sum is below 2^48.
+    uint64_t sum_x, sum_y;
+};
+
+// Fills *out for src (CV_8UC1, at most 2^24 pixels). No scratch memory.
+void nonzero_stats(struct NonzeroStats *out, const struct Mat *src);
+
 #endif // HIST_H_

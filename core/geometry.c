@@ -42,6 +42,25 @@ void flip(struct Mat *dst, const struct Mat *src, int flip_code) {
     }
 }
 
+void crop(struct Mat *dst, const struct Mat *src, int x, int y) {
+    ASSERT(dst != NULL && src != NULL);
+    ASSERT(dst != src && dst->data != src->data);
+    ASSERT(mat_type(dst) == mat_type(src));
+    ASSERT(x >= 0 && y >= 0);
+    // Written as subtractions so x + cols cannot overflow int.
+    ASSERT(x <= src->cols && dst->cols <= src->cols - x);
+    ASSERT(y <= src->rows && dst->rows <= src->rows - y);
+    if (dst->rows == 0 || dst->cols == 0) {
+        return;
+    }
+    size_t px        = mat_pixel_size(src);
+    size_t row_bytes = (size_t)dst->cols * px;
+    size_t offset    = (size_t)x * px;
+    for (int r = 0; r < dst->rows; r++) {
+        memcpy(mat_row(dst, r), mat_row(src, y + r) + offset, row_bytes);
+    }
+}
+
 static void resize_nearest_row(const uchar *restrict s, uchar *restrict d,
                                int dst_w, int cn, const int *sx) {
     for (int x = 0; x < dst_w; x++, d += cn) {

@@ -5,6 +5,7 @@
 #include "improc.h"
 #include "improc_internal.h"
 #include "test_alloc_util.h"
+#include "test_expect_assert.h"
 #include "test_mat_util.h"
 
 static jmp_buf assert_jump;
@@ -612,7 +613,136 @@ static void test_otsu_misuse_and_scratch(void) {
     free_mat(&src);
 }
 
+static void check_stats(const struct NonzeroStats *s, uint32_t count, int x_min,
+                        int y_min, int x_max, int y_max, uint64_t sum_x,
+                        uint64_t sum_y) {
+    CHECK_EQ_INT(s->count, count);
+    CHECK_EQ_INT(s->x_min, x_min);
+    CHECK_EQ_INT(s->y_min, y_min);
+    CHECK_EQ_INT(s->x_max, x_max);
+    CHECK_EQ_INT(s->y_max, y_max);
+    CHECK_EQ_INT(s->sum_x, sum_x);
+    CHECK_EQ_INT(s->sum_y, sum_y);
+}
+
+static void test_nonzero_stats_hand(void) {
+    // Nonzero at (x, y) = (1, 0), (3, 1), (1, 2), (2, 2); any value > 0 counts.
+    const uchar in[] = {
+        0, 255, 0, 0, 0, //
+        0, 0,   0, 1, 0, //
+        0, 9,   7, 0, 0, //
+    };
+    struct Mat         *m = mat_from_bytes(3, 5, CV_8UC1, in);
+    struct NonzeroStats s;
+    nonzero_stats(&s, m);
+    check_stats(&s, 4, 1, 0, 3, 2, 1 + 3 + 1 + 2, 0 + 1 + 2 + 2);
+    free_mat(&m);
+}
+
+static void test_nonzero_stats_empty(void) {
+    const uchar         zeros[6] = {0};
+    struct Mat         *m        = mat_from_bytes(2, 3, CV_8UC1, zeros);
+    struct Mat         *none     = alloc_mat(0, 0, CV_8UC1);
+    struct NonzeroStats s;
+    nonzero_stats(&s, m);
+    check_stats(&s, 0, 0, 0, -1, -1, 0, 0);
+    nonzero_stats(&s, none);
+    check_stats(&s, 0, 0, 0, -1, -1, 0, 0);
+    free_mat(&m);
+    free_mat(&none);
+}
+
+static void test_nonzero_stats_width_sweep(void) {
+    for (int w = 0; w <= 65; w++) {
+        struct Mat *m = alloc_mat(4, w, CV_8UC1);
+        fill_pattern(m, (unsigned)w);
+        // Clear about half the pixels so the box is not always the full image.
+        for (int y = 0; y < 4; y++) {
+            for (int x = 0; x < w; x++) {
+                uchar *p = mat_at(m, y, x);
+                if (*p < 128) {
+                    *p = 0;
+                }
+            }
+        }
+        uint32_t count = 0;
+        int      x0 = 0, y0 = 0, x1 = -1, y1 = -1;
+        uint64_t sx = 0, sy = 0;
+        for (int y = 0; y < 4; y++) {
+            for (int x = 0; x < w; x++) {
+                if (*(const uchar *)mat_at(m, y, x) == 0) {
+                    continue;
+                }
+                if (count == 0) {
+                    x0 = x1 = x;
+                    y0 = y1 = y;
+                }
+                x0 = x < x0 ? x : x0;
+                x1 = x > x1 ? x : x1;
+                y0 = y < y0 ? y : y0;
+                y1 = y > y1 ? y : y1;
+                sx += (uint64_t)x;
+                sy += (uint64_t)y;
+                count++;
+            }
+        }
+        struct NonzeroStats s;
+        nonzero_stats(&s, m);
+        check_stats(&s, count, x0, y0, x1, y1, sx, sy);
+        free_mat(&m);
+    }
+}
+
+// 1 x 2^24 image, all pixels set: sum_x = (2^24 - 1) * 2^24 / 2 > 2^32, so
+// the sums must not be 32-bit.
+static void test_nonzero_stats_large_sums(void) {
+    const int   n = 1 << 24;
+    struct Mat *m = alloc_mat(1, n, CV_8UC1);
+    CHECK(m != NULL);
+    if (m == NULL) {
+        return;
+    }
+    memset(m->data, 1, (size_t)n);
+    struct NonzeroStats s;
+    nonzero_stats(&s, m);
+    check_stats(&s, (uint32_t)n, 0, 0, n - 1, 0,
+                (uint64_t)(n - 1) * (uint64_t)n / 2u, 0);
+    free_mat(&m);
+
+    // The same for a 2^24 x 1 column, which drives sum_y above 2^32.
+    struct Mat *col = alloc_mat(n, 1, CV_8UC1);
+    CHECK(col != NULL);
+    if (col == NULL) {
+        return;
+    }
+    memset(col->data, 1, (size_t)n * col->step[0]);
+    nonzero_stats(&s, col);
+    check_stats(&s, (uint32_t)n, 0, 0, 0, n - 1, 0,
+                (uint64_t)(n - 1) * (uint64_t)n / 2u);
+    free_mat(&col);
+}
+
+static void test_nonzero_stats_misuse(void) {
+    struct Mat         *rgb = alloc_mat(2, 2, CV_8UC3);
+    struct Mat         *big = alloc_mat(1, (1 << 24) + 1, CV_8UC1);
+    struct Mat         *g   = alloc_mat(2, 2, CV_8UC1);
+    struct NonzeroStats s;
+    EXPECT_ASSERT(nonzero_stats(&s, rgb)); // not single channel
+    EXPECT_ASSERT(nonzero_stats(NULL, g)); // no output
+    if (big != NULL) {
+        EXPECT_ASSERT(nonzero_stats(&s, big)); // more than 2^24 pixels
+    }
+    free_mat(&rgb);
+    free_mat(&big);
+    free_mat(&g);
+}
+
 int main(void) {
+    RUN_TEST(test_nonzero_stats_hand);
+    RUN_TEST(test_nonzero_stats_empty);
+    RUN_TEST(test_nonzero_stats_width_sweep);
+    RUN_TEST(test_nonzero_stats_large_sums);
+    RUN_TEST(test_nonzero_stats_misuse);
     RUN_TEST(test_calc_hist_hand);
     RUN_TEST(test_calc_hist_extremes);
     RUN_TEST(test_calc_hist_width_sweep);
