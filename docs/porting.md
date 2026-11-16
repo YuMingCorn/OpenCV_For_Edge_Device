@@ -50,7 +50,7 @@ improc_set_allocator(pool_alloc, pool_free);
 
 ## 暫存記憶體不足的處理方式
 
-所有需要暫存記憶體的運算（濾波、形態學、`resize`、`equalize_hist`、`otsu_threshold`、開啟非極大值抑制的 `fast_detect`）採同一個規則：向 `fast_malloc` 要不到記憶體，或暫存大小的計算超出 `size_t`（AVR 為 16 位元，Cortex-M 為 32 位元），就以 `ASSERT` 中止。大小計算全部經過溢位檢查（`core/improc_internal.h` 的 `improc_scratch_mul`、`improc_scratch_add`），所以溢位不會變成太小的緩衝區。ASSERT 之前會先釋放已經取得的區塊，處理函式即使 `longjmp` 也不會洩漏。
+所有需要暫存記憶體的運算（濾波、形態學、`resize`、`equalize_hist`、`otsu_threshold`、開啟非極大值抑制的 `fast_detect`、`orb_detect`、交叉檢查的 `match_descriptors`）採同一個規則：向 `fast_malloc` 要不到記憶體，或暫存大小的計算超出 `size_t`（AVR 為 16 位元，Cortex-M 為 32 位元），就以 `ASSERT` 中止。大小計算全部經過溢位檢查（`core/improc_internal.h` 的 `improc_scratch_mul`、`improc_scratch_add`），所以溢位不會變成太小的緩衝區。ASSERT 之前會先釋放已經取得的區塊，處理函式即使 `longjmp` 也不會洩漏。
 
 嵌入式使用者若不能接受直接中止，請用 `improc_set_assert_handler` 安裝處理函式，在裡面重開機或 `longjmp` 回安全點。`calc_hist` 與 `otsu_threshold_hist` 使用呼叫端提供的直方圖，不需要暫存記憶體，沒有配置器也能執行。`mat_create` 與圖檔讀寫則回傳 `NULL`，因為這些輸入錯誤是預期內的狀況。
 
@@ -139,6 +139,9 @@ Cortex-M0+（`-fstack-usage`）最大的五個堆疊框：
 | `resize`（`INTER_NEAREST`、`INTER_LINEAR`） | `dst_cols * (2 * sizeof(int) + 2)` |
 | `resize`（`INTER_AREA`） | `2 * dst_cols * cn * 4` |
 | `fast_detect` | 有非極大值抑制：`3 * cols`（三列分數）；沒有：0。角點陣列由呼叫端提供 |
+| `orb_detect` | `n * (sizeof(struct KeyPoint) + 16)`（`n` 為 FAST 角點數，AVR 上每個 28 位元組），執行 FAST 時另加 `3 * cols`。關鍵點陣列由呼叫端提供 |
+| `orb_compute`、`hamming_distance` | 0（描述子陣列由呼叫端提供） |
+| `match_descriptors` | 交叉檢查：`nt * 4`；不檢查：0 |
 
 濾波類運算只保留 `ksize` 列的水平 pass 結果（環形緩衝區），所以暫存記憶體與影像高度無關，只與列寬和 `ksize` 有關。`INTER_AREA` 另外限制來源影像不超過 2^24 個像素，直方圖函式與 `nonzero_stats` 也一樣。
 
@@ -148,7 +151,7 @@ HSV 轉換用兩張 `uint32_t[256]` 的除法表（共 2 KB）。AVR 沒有 `PRO
 
 ## 與 OpenCV 的差異
 
-Kodak 24 張影像、50 個運算與 OpenCV 4.10.0 的逐運算最大差異見 [kodak-results.md](kodak-results.md)。
+Kodak 24 張影像、51 個運算與 OpenCV 4.10.0 的逐運算最大差異見 [kodak-results.md](kodak-results.md)。
 
 ## 已知限制
 
