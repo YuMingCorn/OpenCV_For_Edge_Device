@@ -5,7 +5,7 @@
   "keywords": ["image processing", "computer vision", "esp32-cam", "otsu", "gaussian", "fixed point"],
   "repository": {
     "type": "git",
-    "url": "https://github.com/YuMingCorn/opencv_c.git"
+    "url": "https://github.com/YuMingCorn/OpenCV_For_Edge_Device.git"
   },
   "authors": [{ "name": "YuMingCorn", "maintainer": true }],
   "license": "MIT",
