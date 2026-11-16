@@ -62,7 +62,7 @@ jobs:
         run: ctest --test-dir build --output-on-failure
 
   cross-compile:
-    name: Cross-compile (Raspberry Pi, Cortex-M, AVR)
+    name: Cross-compile (Raspberry Pi, Cortex-M, AVR, ESP32)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -74,6 +74,15 @@ jobs:
             gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf \
             gcc-arm-none-eabi libnewlib-arm-none-eabi \
             gcc-avr avr-libc qemu-user
+
+      # Same GCC 14.2.0 build that the Arduino ESP32 core 3.3 ships.
+      - name: Install ESP32 toolchain
+        run: |
+          release=esp-14.2.0_20260121
+          archive=xtensa-esp-elf-14.2.0_20260121-x86_64-linux-gnu.tar.xz
+          curl -fsSL "https://github.com/espressif/crosstool-NG/releases/download/$release/$archive" |
+            tar -xJ -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/xtensa-esp-elf/bin" >> "$GITHUB_PATH"
 
       - name: Compile every target and scan symbols
         run: bash tools/check_cross.sh --require-all
