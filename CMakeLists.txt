@@ -25,7 +25,7 @@ option(IMPROC_NO_MALLOC "No default allocator; alloc_mat/free_mat not compiled" 
 option(IMPROC_ENABLE_FLOAT "Compile the float sources (IMPROC_HAS_FLOAT=1)" ON)
 option(IMPROC_ASSERT_TERSE "ASSERT passes NULL, NULL, line to the handler" OFF)
 option(IMPROC_WERROR "Treat compiler warnings as errors" OFF)
-set(IMPROC_KODAK_DIR "${CMAKE_SOURCE_DIR}/datasets/kodak"
+set(IMPROC_KODAK_DIR "${PROJECT_SOURCE_DIR}/datasets/kodak"
     CACHE PATH "Directory holding kodim01.png ... kodim24.png")
 
 function(improc_warnings target)
@@ -48,7 +48,7 @@ function(add_kodak_test module)
     target_link_libraries(${name} PRIVATE improc)
     add_test(NAME ${name}
              COMMAND ${name} --dir ${IMPROC_KODAK_DIR}
-                     --manifest ${CMAKE_SOURCE_DIR}/tests/golden/kodak_${module}.txt
+                     --manifest ${PROJECT_SOURCE_DIR}/tests/golden/kodak_${module}.txt
              WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
     set_tests_properties(${name} PROPERTIES SKIP_RETURN_CODE 77)
 endfunction()
@@ -119,6 +119,12 @@ target_link_libraries(improc PUBLIC improc_core Threads::Threads)
 # stb_image / stb_image_write call pow() even when the float sources are off.
 if(UNIX)
     target_link_libraries(improc PUBLIC m)
+endif()
+
+# Pulled in with add_subdirectory: the parent project gets the two libraries
+# only, not the demo, benchmarks and tests.
+if(NOT PROJECT_IS_TOP_LEVEL)
+    return()
 endif()
 
 add_executable(demo main.c)
