@@ -33,7 +33,7 @@
 
 ![運算函式的共同流程](03-op-call-flow.svg)
 
-呼叫端先配置 `dst`，運算函式再用 `ASSERT` 檢查前置條件。`ASSERT` 失敗時呼叫 `improc_assert_fail`：如果用 `improc_set_assert_handler` 裝了 handler，就先呼叫它（handler 可以 `longjmp` 回到呼叫端）；handler 沒有接手時，才印訊息並 `exit(EXIT_FAILURE)`，定義 `IMPROC_NO_STDIO` 時改成 `abort()`。需要暫存記憶體的運算（filter、morph、resize、hist）用 `improc_scratch_mul` / `improc_scratch_add` 檢查大小，再用 `fast_malloc`（可用 `improc_set_allocator` 換掉配置器）配置，最後由 `improc_scratch_check` 檢查：只要有一塊是 `NULL`，就先釋放其餘區塊再 `ASSERT`，所以 handler 用 `longjmp` 也不會漏記憶體。通過檢查後逐列呼叫帶有 `restrict` 的 `static` row kernel，每個 kernel 只處理一列、不做檢查。`cvt_color` 用一張 20 列的轉換表挑 kernel（含 HSV 與 YUV），其他運算各自選擇 kernel 的方式見圖中表格。
+呼叫端先配置 `dst`，運算函式再用 `ASSERT` 檢查前置條件。`ASSERT` 失敗時呼叫 `improc_assert_fail`：如果用 `improc_set_assert_handler` 裝了 handler，就先呼叫它（handler 可以 `longjmp` 回到呼叫端）；handler 沒有接手時，才印訊息並 `exit(EXIT_FAILURE)`，定義 `IMPROC_NO_STDIO` 時改成 `abort()`。需要暫存記憶體的運算（filter、morph、resize、hist）用 `improc_scratch_mul` / `improc_scratch_add` 檢查大小，再用 `fast_malloc`（可用 `improc_set_allocator` 換掉配置器）配置，最後由 `improc_scratch_check` 檢查：只要有一塊是 `NULL`，就先釋放其餘區塊再 `ASSERT`，所以 handler 用 `longjmp` 也不會漏記憶體。通過檢查後逐列呼叫帶有 `restrict` 的 `static` row kernel，每個 kernel 只處理一列、不做檢查。`cvt_color` 用一張 29 列的轉換表挑 kernel（含 HSV、YUV，以及相機格式 RGB565 與 YUYV），其他運算各自選擇 kernel 的方式見圖中表格。
 
 對應檔案：`core/color.c`、`core/pixel.c`、`core/geometry.c`、`core/utils.h`、`core/utils.c`、`core/improc_internal.h`。`morph`、`hist`、`convert_f32` 的前置條件寫法與此相同。
 
@@ -42,6 +42,8 @@
 ![可分離濾波](04-separable-filter.svg)
 
 `box_filter`、`gaussian_blur`、`sobel` 都分成水平與垂直兩個 pass，中間用環形緩衝區 `ring` 銜接，而不是整張暫存影像。`ring` 只有 `nslots = min(視窗列數, rows)` 列（`box`、`gauss` 的視窗是 `ksize`，`sobel` 是 3），列 `y` 放在槽位 `y % nslots`。輸出列 `y` 最多讀連續 `window` 列，所以槽位在它的列還要用的時候不會被覆蓋。`box_filter` 另外保留一條 `uint32_t` 的欄累加 `sum`，並且在補算新列（會覆蓋同一個槽位）之前，先把離開的那一列減掉。三者的 `ring` 型別、捨入方式各不相同，邊界一律使用 reflect 101。圖中並排列出三條流程，並標出各自的暫存大小（`box`：`ksize*n*2 + n*4 + (cols+2r)*cn`；`gauss`：`ksize*n*2 + (cols+2r)*cn`；`sobel`：`3*cols*2 + cols + 2`，單位是位元組），最下方畫出大小檢查與 `improc_scratch_check` 的失敗路徑。更完整的暫存量見 [porting.md](porting.md)。
+
+`median_blur` 不可分離，不在圖中。它的邊界是 replicate（與 `cv2.medianBlur` 相同）：`ksize` 3 用 19 次交換的排序網路，5 用 Wirth 選擇，兩者都不配置暫存；7 以上用 Huang 滑動直方圖，暫存是 `ksize` 個列指標加 512 位元組的直方圖。
 
 對應檔案：`core/filter.c`、`core/improc_internal.h`。
 

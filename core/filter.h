@@ -15,4 +15,11 @@ void gaussian_blur(struct Mat *dst, const struct Mat *src, int ksize);
 // src CV_8UC1, dst CV_16SC1 of the same size. Output range is +-1020.
 void sobel(struct Mat *dst, const struct Mat *src, int dx, int dy);
 
+// ksize x ksize median filter, applied to each channel. CV_8UC1/3/4, dst has
+// the same type and size as src and a distinct buffer. ksize is odd, 3..255.
+// Border: replicate (aaa|abcdefgh|hhh), like cv2.medianBlur. The result is the
+// element of rank ksize^2 / 2 of the sorted window, so it is always one of the
+// window values.
+void median_blur(struct Mat *dst, const struct Mat *src, int ksize);
+
 #endif // FILTER_H_
