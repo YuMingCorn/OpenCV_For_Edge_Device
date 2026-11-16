@@ -5,7 +5,7 @@
 ## 做法
 
 1. 每個模組各有一支 `test_kodak_<module>`。它對 24 張影像各跑一遍運算，計算輸出的 FNV-1a 雜湊，與 `tests/golden/kodak_<module>.txt` 比對。同一份雜湊清單在 Windows（LLVM-MinGW）、WSL（GCC x86-64）與 `qemu-aarch64` 下都通過，所以各平台的輸出逐 byte 相同。
-2. 加上 `--dump <目錄>` 時，測試把每個輸出存成 `<影像>_<運算>.png`。六個模組倒進同一個目錄。
+2. 加上 `--dump <目錄>` 時，測試把每個輸出存成 `<影像>_<運算>.png`。七個模組倒進同一個目錄。
 3. `tools/compare_opencv.py --dump <目錄>` 讀入這些 PNG。每個運算用我們自己輸出的輸入餵給 OpenCV（例如 `cv2.Sobel` 的輸入是我們輸出的灰階圖），所以某一步的差異不會傳到下一步。最大差異超過容許誤差就以非零狀態結束。
 
 ```sh
@@ -56,10 +56,16 @@ OpenCV 4.10.0，24 張影像，38 個運算，全部在容許誤差內。「差�
 | `area_quarter` | area | 1 | 1 | 3.0672 | `INTER_AREA` |
 | `area_nonint` | area | 1 | 1 | 0.0009 | `INTER_AREA` |
 | `area_up_1_5` | area | 0 | 1 | 0 | `INTER_AREA` |
+| `edge_gray` | edge | 1 | 1 | 3.6653 | `COLOR_RGB2GRAY` |
+| `crop_center` | edge | 0 | 0 | 0 | numpy 切片（中央一半） |
+| `absdiff_shift` | edge | 0 | 0 | 0 | `cv2.absdiff`（相距 6 像素的兩個畫面） |
+| `motion_mask` | edge | 0 | 0 | 0 | `absdiff` 後 `THRESH_BINARY` 40 |
+| `motion_box` | edge | 0 | 0 | 0 | numpy 外框與重心（同時比對 `motion_stats`、`still_stats`） |
+| `corner_box` | edge | 0 | 0 | 0 | 角落 12×12，十字被邊界裁切（同時比對 `corner_stats`） |
 
 ## 解讀
 
-- 逐 byte 相同（最大差異 0）的運算：色彩順序轉換、查表、濾波（box、gauss、Sobel）、翻轉、整數倍的 nearest、形態學、直方圖等化、Otsu、RGB 轉 HSV、半倍縮小的 `INTER_AREA`。`equalize`、`half_linear`、`area_up_1_5` 的容許誤差是 1，實測也是 0。
+- 逐 byte 相同（最大差異 0）的運算：色彩順序轉換、查表、濾波（box、gauss、Sobel）、翻轉、裁切、絕對差、整數倍的 nearest、形態學、直方圖等化、Otsu、RGB 轉 HSV、半倍縮小的 `INTER_AREA`。`equalize`、`half_linear`、`area_up_1_5` 的容許誤差是 1，實測也是 0。
 - 差 1 個階的運算都是定點捨入與 OpenCV 的捨入方式不同：灰階、`convertScaleAbs`、非整數倍的雙線性縮放、HSV 轉回 RGB、YUV、三分之一與四分之一的 `INTER_AREA`。差異都在容許範圍內，沒有放寬任何容許誤差。
 - 相機格式（camera 模組）的輸入不是真的相機畫面：測試把 Kodak 的 RGB 打包成 RGB565 或 YUYV 位元組，再交給解碼函式。`tools/opencv_ref/camera.py` 用同樣的方式打包，再交給 OpenCV。RGB565 與 YUYV 轉 RGB 和 OpenCV 逐 byte 相同；RGB565 轉灰階沿用本專案的灰階公式，所以和 OpenCV 差 1。
 - 每個運算的容許誤差寫在 `tools/opencv_ref/*.py`。

@@ -2,6 +2,7 @@
 
 #include "filter.h"
 #include "pixel.h"
+#include "test_expect_assert.h"
 #include "test_mat_util.h"
 
 static void run_threshold(int type, int rows, int cols, int mat_t,
@@ -329,6 +330,87 @@ static void test_synthetic_large_values(void) {
     free_mat(&m);
 }
 
+static void run_absdiff(int rows, int cols, int type, const uchar *a,
+                        const uchar *b, const uchar *expected) {
+    struct Mat *ma  = mat_from_bytes(rows, cols, type, a);
+    struct Mat *mb  = mat_from_bytes(rows, cols, type, b);
+    struct Mat *dst = alloc_mat(rows, cols, type);
+    absdiff(dst, ma, mb);
+    CHECK_MAT_BYTES(dst, expected);
+    free_mat(&ma);
+    free_mat(&mb);
+    free_mat(&dst);
+}
+
+static void test_absdiff_values_c1(void) {
+    const uchar a[]   = {0, 255, 10, 200, 128, 7};
+    const uchar b[]   = {255, 0, 10, 100, 129, 0};
+    const uchar out[] = {255, 255, 0, 100, 1, 7};
+    run_absdiff(2, 3, CV_8UC1, a, b, out);
+}
+
+static void test_absdiff_c4_alpha_normal(void) {
+    const uchar a[]   = {1, 2, 3, 255};
+    const uchar b[]   = {3, 2, 1, 0};
+    const uchar out[] = {2, 0, 2, 255};
+    run_absdiff(1, 1, CV_8UC4, a, b, out);
+}
+
+static void test_absdiff_width_sweep(void) {
+    for (int w = 0; w <= 65; w++) {
+        struct Mat *a   = alloc_mat(3, w, CV_8UC3);
+        struct Mat *b   = alloc_mat(3, w, CV_8UC3);
+        struct Mat *dst = alloc_mat(3, w, CV_8UC3);
+        fill_pattern(a, (unsigned)w);
+        fill_pattern(b, (unsigned)(w * 11 + 5));
+        absdiff(dst, a, b);
+        for (int y = 0; y < 3; y++) {
+            for (int x = 0; x < w; x++) {
+                const uchar *p = mat_at(a, y, x);
+                const uchar *q = mat_at(b, y, x);
+                const uchar *d = mat_at(dst, y, x);
+                for (int c = 0; c < 3; c++) {
+                    int diff = (int)p[c] - (int)q[c];
+                    CHECK_EQ_INT(d[c], diff < 0 ? -diff : diff);
+                }
+            }
+        }
+        free_mat(&a);
+        free_mat(&b);
+        free_mat(&dst);
+    }
+}
+
+static void test_absdiff_rejects_misuse(void) {
+    struct Mat *a     = alloc_mat(2, 2, CV_8UC1);
+    struct Mat *b     = alloc_mat(2, 2, CV_8UC1);
+    struct Mat *dst   = alloc_mat(2, 2, CV_8UC1);
+    struct Mat *small = alloc_mat(2, 1, CV_8UC1);
+    struct Mat *c3    = alloc_mat(2, 2, CV_8UC3);
+    struct Mat *s16   = alloc_mat(2, 2, CV_16SC1);
+    struct Mat *s16b  = alloc_mat(2, 2, CV_16SC1);
+    struct Mat *s16d  = alloc_mat(2, 2, CV_16SC1);
+    EXPECT_ASSERT(absdiff(a, a, b));       // dst is a
+    EXPECT_ASSERT(absdiff(b, a, b));       // dst is b
+    EXPECT_ASSERT(absdiff(dst, small, b)); // a size differs
+    EXPECT_ASSERT(absdiff(dst, a, small)); // b size differs
+    EXPECT_ASSERT(absdiff(NULL, a, b));
+    EXPECT_ASSERT(absdiff(dst, NULL, b));
+    EXPECT_ASSERT(absdiff(dst, a, NULL));
+    EXPECT_ASSERT(absdiff(small, a, b));     // dst size differs
+    EXPECT_ASSERT(absdiff(dst, a, c3));      // b type differs
+    EXPECT_ASSERT(absdiff(c3, a, b));        // dst type differs
+    EXPECT_ASSERT(absdiff(s16d, s16, s16b)); // not 8-bit
+    free_mat(&a);
+    free_mat(&b);
+    free_mat(&dst);
+    free_mat(&small);
+    free_mat(&c3);
+    free_mat(&s16);
+    free_mat(&s16b);
+    free_mat(&s16d);
+}
+
 int main(void) {
     RUN_TEST(test_convert_scale_c3);
     RUN_TEST(test_convert_scale_values);
@@ -348,5 +430,9 @@ int main(void) {
     RUN_TEST(test_threshold_c4_alpha_normal);
     RUN_TEST(test_threshold_extremes);
     RUN_TEST(test_threshold_width_sweep);
+    RUN_TEST(test_absdiff_values_c1);
+    RUN_TEST(test_absdiff_c4_alpha_normal);
+    RUN_TEST(test_absdiff_width_sweep);
+    RUN_TEST(test_absdiff_rejects_misuse);
     return test_finish();
 }

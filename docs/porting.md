@@ -117,8 +117,8 @@ Cortex-M0+（`-fstack-usage`）最大的五個堆疊框：
 | `convert_scale`（`pixel.c`） | 288 |
 | `resize`（`geometry.c`） | 248 |
 | `otsu_threshold_hist`（`hist.c`） | 208 |
+| `nonzero_stats`（`hist.c`） | 128 |
 | `gaussian_blur`（`filter.c`） | 128 |
-| `morph`（`morph.c`） | 112 |
 
 ### 暫存記憶體
 
@@ -126,8 +126,9 @@ Cortex-M0+（`-fstack-usage`）最大的五個堆疊框：
 
 | 運算 | 暫存位元組 |
 |---|---|
-| `threshold`、`mat_lut`、`convert_scale`、`cvt_color`、`flip`、`convert_to` | 0 |
+| `threshold`、`mat_lut`、`absdiff`、`convert_scale`、`cvt_color`、`flip`、`crop`、`convert_to` | 0 |
 | `calc_hist`、`otsu_threshold_hist` | 0（直方圖由呼叫端提供） |
+| `nonzero_stats` | 0 |
 | `box_filter` | `ksize' * n * 2 + n * 4 + (cols + 2r) * cn` |
 | `gaussian_blur` | `ksize' * n * 2 + (cols + 2r) * cn` |
 | `sobel` | `min(3, rows) * cols * 2 + cols + 2` |
@@ -137,7 +138,7 @@ Cortex-M0+（`-fstack-usage`）最大的五個堆疊框：
 | `resize`（`INTER_NEAREST`、`INTER_LINEAR`） | `dst_cols * (2 * sizeof(int) + 2)` |
 | `resize`（`INTER_AREA`） | `2 * dst_cols * cn * 4` |
 
-濾波類運算只保留 `ksize` 列的水平 pass 結果（環形緩衝區），所以暫存記憶體與影像高度無關，只與列寬和 `ksize` 有關。`INTER_AREA` 另外限制來源影像不超過 2^24 個像素，直方圖函式也一樣。
+濾波類運算只保留 `ksize` 列的水平 pass 結果（環形緩衝區），所以暫存記憶體與影像高度無關，只與列寬和 `ksize` 有關。`INTER_AREA` 另外限制來源影像不超過 2^24 個像素，直方圖函式與 `nonzero_stats` 也一樣。
 
 ### AVR 的 RAM
 

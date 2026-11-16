@@ -105,6 +105,32 @@ void mat_lut(struct Mat *dst, const struct Mat *src, const uchar lut[256]) {
     }
 }
 
+static void absdiff_row(const uchar *restrict a, const uchar *restrict b,
+                        uchar *restrict d, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        d[i] = (uchar)(a[i] > b[i] ? a[i] - b[i] : b[i] - a[i]);
+    }
+}
+
+void absdiff(struct Mat *dst, const struct Mat *a, const struct Mat *b) {
+    ASSERT(dst != NULL && a != NULL && b != NULL);
+    ASSERT(dst != a && dst->data != a->data);
+    ASSERT(dst != b && dst->data != b->data);
+    ASSERT(is_u8_image_type(mat_type(a)));
+    ASSERT(mat_type(b) == mat_type(a) && mat_type(dst) == mat_type(a));
+    ASSERT(b->rows == a->rows && b->cols == a->cols);
+    ASSERT(dst->rows == a->rows && dst->cols == a->cols);
+
+    if (a->rows == 0 || a->cols == 0) {
+        return;
+    }
+    // size_t: cols * channels can exceed a 16-bit int.
+    size_t n = (size_t)a->cols * mat_channel_num(a);
+    for (int y = 0; y < a->rows; y++) {
+        absdiff_row(mat_row(a, y), mat_row(b, y), mat_row(dst, y), n);
+    }
+}
+
 void convert_scale(struct Mat *dst, const struct Mat *src, int32_t alpha_q8,
                    int32_t beta) {
     ASSERT(dst != src && dst->data != src->data);
