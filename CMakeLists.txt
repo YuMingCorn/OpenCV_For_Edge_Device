@@ -63,6 +63,7 @@ set(IMPROC_CORE_SOURCES
     core/utils.c
     core/morph.c
     core/hist.c
+    core/features2d.c
     # lane-append: core sources
 )
 
@@ -158,6 +159,7 @@ add_improc_test(test_hist)
 add_improc_test(test_f32)
 add_improc_test(test_scratch)
 add_improc_test(test_arduino_synthetic)
+add_improc_test(test_features)
 # lane-append: tests
 
 add_kodak_test(phase1)
@@ -168,6 +170,7 @@ add_kodak_test(camera)
 add_kodak_test(area)
 add_kodak_test(edge)
 add_kodak_test(median)
+add_kodak_test(features)
 if(IMPROC_ENABLE_FLOAT)
     add_kodak_test(f32)
 endif()

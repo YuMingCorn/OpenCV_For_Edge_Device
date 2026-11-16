@@ -44,7 +44,8 @@ void improc_set_allocator(improc_alloc_fn alloc_fn, improc_free_fn free_fn);
 
 // Scratch-memory policy. Every op that needs scratch (box_filter,
 // gaussian_blur, sobel, erode/dilate/morph_*, resize, equalize_hist,
-// otsu_threshold) takes it from fast_malloc and releases it before it returns.
+// otsu_threshold, fast_detect with non-max suppression) takes it from
+// fast_malloc and releases it before it returns.
 // It fails ASSERT, in the same way in every module, when
 //   - fast_malloc returns NULL (out of memory, or no allocator), or
 //   - a scratch size does not fit size_t (the checked size arithmetic in

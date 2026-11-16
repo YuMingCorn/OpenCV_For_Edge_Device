@@ -225,7 +225,7 @@ cmake --build build-armhf
 FLAGS="-std=c11 -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard -Os \
        -ffunction-sections -fdata-sections -ffp-contract=off -Icore \
        -DIMPROC_CORE_ONLY=1 -DIMPROC_NO_STDIO=1 -DIMPROC_HAS_FLOAT=1"
-for f in color pixel filter geometry mat utils morph hist convert_f32; do
+for f in color pixel filter geometry mat utils morph hist features2d convert_f32; do
     arm-none-eabi-gcc $FLAGS -c core/$f.c
 done
 arm-none-eabi-ar rcs libimproc_core.a *.o
@@ -411,7 +411,7 @@ void process_frame(void) {
 }
 ```
 
-`cvt_color`、`threshold`、`mat_lut`、`convert_scale`、`absdiff`、`flip`、`crop`、`calc_hist`、`otsu_threshold_hist`、`nonzero_stats` 不需要暫存記憶體。濾波（`median_blur` 只在 `ksize` 7 以上）、形態學、`resize`、`equalize_hist` 與 `otsu_threshold` 會向 `fast_malloc` 要一小塊暫存。沒有 malloc 時，要用 `improc_set_allocator` 提供自己的配置器，例如固定大小的記憶體池。各運算的暫存大小見 [docs/porting.md](docs/porting.md)。
+`cvt_color`、`threshold`、`mat_lut`、`convert_scale`、`absdiff`、`flip`、`crop`、`calc_hist`、`otsu_threshold_hist`、`nonzero_stats` 不需要暫存記憶體。濾波（`median_blur` 只在 `ksize` 7 以上）、形態學、`resize`、`equalize_hist`、`otsu_threshold` 與 `fast_detect`（只在開啟非極大值抑制時）會向 `fast_malloc` 要一小塊暫存。沒有 malloc 時，要用 `improc_set_allocator` 提供自己的配置器，例如固定大小的記憶體池。各運算的暫存大小見 [docs/porting.md](docs/porting.md)。
 
 ### 動態偵測
 
@@ -455,6 +455,7 @@ if (s.count > 200) {                            // 變動的像素夠多才算�
 | `hist.h` | `calc_hist`、`equalize_hist` | 256 階直方圖與直方圖等化 |
 | `hist.h` | `otsu_threshold`、`otsu_threshold_hist` | Otsu 門檻；判準以精確的整數與分數比較，沒有浮點捨入造成的平手 |
 | `hist.h` | `nonzero_stats` | 二值影像的非零像素數、外接矩形與重心座標總和，用來判斷有沒有物體、在哪裡、多大 |
+| `features2d.h` | `fast_detect` | FAST-9 角點偵測（灰階），可選擇非極大值抑制；角點寫進呼叫端提供的 `struct KeyPoint` 陣列，回傳找到的總數；結果與 `cv2.FastFeatureDetector` 的位置、順序、分數都相同 |
 | `geometry.h` | `flip` | 水平、垂直、雙向翻轉 |
 | `geometry.h` | `crop` | 從大圖複製出一塊矩形區域（任何型別），區域大小由 dst 決定 |
 | `geometry.h` | `resize` | `INTER_NEAREST`、`INTER_LINEAR`（半像素中心）與 `INTER_AREA`（整數面積權重，放大縮小皆可） |
@@ -481,7 +482,7 @@ ctest --test-dir build --output-on-failure
 比對腳本需要 Python 3、`opencv-python` 與 `numpy`（`pip install opencv-python numpy`）。先用各測試的 `--dump` 輸出影像，再讓腳本逐運算算出與 OpenCV 的最大差異：
 
 ```sh
-for m in phase1 morph hist color2 camera area edge median f32; do
+for m in phase1 morph hist color2 camera area edge median features f32; do
   build/test_kodak_$m --dir datasets/kodak --manifest tests/golden/kodak_$m.txt --dump dump
 done
 python3 tools/compare_opencv.py --dump dump

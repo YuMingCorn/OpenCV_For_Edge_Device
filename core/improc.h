@@ -9,6 +9,7 @@
 #include "utils.h"
 #include "morph.h"
 #include "hist.h"
+#include "features2d.h"
 #if IMPROC_HAS_FLOAT
 #include "convert_f32.h"
 #endif
