@@ -21,6 +21,11 @@ void threshold(struct Mat *dst, const struct Mat *src, uchar thresh,
 // dst[i] = lut[src[i]] for every channel. Same type/size rules as threshold.
 void mat_lut(struct Mat *dst, const struct Mat *src, const uchar lut[256]);
 
+// dst = |a - b| for every channel, the per-pixel difference used for frame
+// differencing (motion detection). a, b, dst: CV_8UC1/3/4, same type and size;
+// dst must not share a buffer with a or b. a and b may be the same image.
+void absdiff(struct Mat *dst, const struct Mat *a, const struct Mat *b);
+
 // dst = saturate_u8(round(src * alpha_q8 / 256 + beta)), CV_8UCn -> CV_8UCn.
 // alpha_q8 in [-32768, 32767], beta in [-65536, 65535]. Intermediates are
 // int32_t: 255 * 32767 + 65535 * 256 + 128 < 2^25.

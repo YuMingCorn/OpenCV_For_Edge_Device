@@ -25,6 +25,44 @@ void calc_hist(uint32_t hist[256], const struct Mat *src) {
     }
 }
 
+void nonzero_stats(struct NonzeroStats *out, const struct Mat *src) {
+    ASSERT(out != NULL);
+    check_u8c1(src);
+    struct NonzeroStats s = {0, 0, 0, -1, -1, 0, 0};
+    for (int y = 0; y < src->rows; y++) {
+        const uchar *row   = mat_row(src, y);
+        uint32_t     n     = 0;
+        uint64_t     sum   = 0;
+        int          first = -1, last = -1;
+        for (int x = 0; x < src->cols; x++) {
+            if (row[x] != 0) {
+                if (first < 0) {
+                    first = x;
+                }
+                last = x;
+                n++;
+                sum += (uint64_t)(uint32_t)x;
+            }
+        }
+        if (n == 0) {
+            continue;
+        }
+        if (s.count == 0) {
+            s.x_min = first;
+            s.x_max = last;
+            s.y_min = y;
+        } else {
+            s.x_min = first < s.x_min ? first : s.x_min;
+            s.x_max = last > s.x_max ? last : s.x_max;
+        }
+        s.y_max = y;
+        s.count += n;
+        s.sum_x += sum;
+        s.sum_y += (uint64_t)(uint32_t)y * n;
+    }
+    *out = s;
+}
+
 void equalize_hist(struct Mat *dst, const struct Mat *src) {
     check_u8c1(src);
     ASSERT(dst != NULL);

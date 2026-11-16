@@ -304,3 +304,215 @@ void sobel(struct Mat *dst, const struct Mat *src, int dx, int dy) {
     fast_free(pad);
     fast_free(ring);
 }
+
+// ---- median_blur ------------------------------------------------------------
+
+// Largest ksize: the window holds at most 255 * 255 = 65025 values, so every
+// histogram bin fits uint16_t.
+#define MEDIAN_MAX_KSIZE 255
+
+static inline int clamp_index(int32_t p, int32_t len) {
+    return (int)(p < 0 ? 0 : (p >= len ? len - 1 : p));
+}
+
+// Compare-exchange: afterwards a <= b.
+#define MEDIAN_SORT2(a, b)                                                     \
+    do {                                                                       \
+        if ((a) > (b)) {                                                       \
+            uchar t_ = (a);                                                    \
+            (a)      = (b);                                                    \
+            (b)      = t_;                                                     \
+        }                                                                      \
+    } while (0)
+
+// Median of 9 values with a 19-exchange sorting network.
+static inline uchar median_of_9(uchar p[9]) {
+    MEDIAN_SORT2(p[1], p[2]);
+    MEDIAN_SORT2(p[4], p[5]);
+    MEDIAN_SORT2(p[7], p[8]);
+    MEDIAN_SORT2(p[0], p[1]);
+    MEDIAN_SORT2(p[3], p[4]);
+    MEDIAN_SORT2(p[6], p[7]);
+    MEDIAN_SORT2(p[1], p[2]);
+    MEDIAN_SORT2(p[4], p[5]);
+    MEDIAN_SORT2(p[7], p[8]);
+    MEDIAN_SORT2(p[0], p[3]);
+    MEDIAN_SORT2(p[5], p[8]);
+    MEDIAN_SORT2(p[4], p[7]);
+    MEDIAN_SORT2(p[3], p[6]);
+    MEDIAN_SORT2(p[1], p[4]);
+    MEDIAN_SORT2(p[2], p[5]);
+    MEDIAN_SORT2(p[4], p[7]);
+    MEDIAN_SORT2(p[4], p[2]);
+    MEDIAN_SORT2(p[6], p[4]);
+    MEDIAN_SORT2(p[4], p[2]);
+    return p[4];
+}
+
+// Wirth selection: returns the element of rank k (0-based) of a[0..n-1] and
+// reorders a. Used for the 25 values of a 5x5 window.
+static uchar median_select(uchar *a, int n, int k) {
+    int lo = 0;
+    int hi = n - 1;
+    while (lo < hi) {
+        uchar pivot = a[k];
+        int   i     = lo;
+        int   j     = hi;
+        do {
+            while (a[i] < pivot) {
+                i++;
+            }
+            while (pivot < a[j]) {
+                j--;
+            }
+            if (i <= j) {
+                uchar t = a[i];
+                a[i]    = a[j];
+                a[j]    = t;
+                i++;
+                j--;
+            }
+        } while (i <= j);
+        if (j < k) {
+            lo = i;
+        }
+        if (k < i) {
+            hi = j;
+        }
+    }
+    return a[k];
+}
+
+// ksize 3 or 5: gathers each window (replicate border) and selects. rp holds
+// the ksize source rows, already clamped to the image.
+static void median_small_row(const uchar *const *rp, uchar *restrict d,
+                             int cols, int cn, int ksize) {
+    const int r = ksize / 2;
+    for (int x = 0; x < cols; x++) {
+        // Byte offsets as size_t: cols * cn may exceed a 16-bit int.
+        size_t xs[5];
+        for (int j = 0; j < ksize; j++) {
+            xs[j] = (size_t)clamp_index((int32_t)x + j - r, cols) * (size_t)cn;
+        }
+        for (int c = 0; c < cn; c++) {
+            uchar w[25];
+            int   n = 0;
+            for (int i = 0; i < ksize; i++) {
+                for (int j = 0; j < ksize; j++) {
+                    w[n++] = rp[i][xs[j] + (size_t)c];
+                }
+            }
+            d[(size_t)x * (size_t)cn + (size_t)c] =
+                ksize == 3 ? median_of_9(w) : median_select(w, 25, 12);
+        }
+    }
+}
+
+// ksize >= 7: Huang sliding-window histogram along one row for one channel.
+// hist counts the window values. med is the current median and below is the
+// number of window values smaller than med, so the median is the smallest
+// value m with below(m) + hist[m] > half, half = ksize^2 / 2. Moving the
+// window by one pixel changes ksize values on each side, and med then moves by
+// the few bins the change needs.
+static void median_huang_row(const uchar *const *rp, uchar *restrict d,
+                             int cols, int cn, int c, int ksize,
+                             uint16_t *hist) {
+    const int     r    = ksize / 2;
+    const int32_t half = ((int32_t)ksize * (int32_t)ksize) / 2;
+    const size_t  ucn  = (size_t)cn;
+    const size_t  uc   = (size_t)c;
+
+    for (int v = 0; v < 256; v++) {
+        hist[v] = 0;
+    }
+    for (int j = -r; j <= r; j++) {
+        const size_t off = (size_t)clamp_index(j, cols) * ucn + uc;
+        for (int i = 0; i < ksize; i++) {
+            hist[rp[i][off]]++;
+        }
+    }
+    int     med   = 0;
+    int32_t below = 0;
+    for (int x = 0;; x++) {
+        while (below + (int32_t)hist[med] <= half) {
+            below += hist[med];
+            med++;
+        }
+        while (below > half) {
+            med--;
+            below -= hist[med];
+        }
+        d[(size_t)x * ucn + uc] = (uchar)med;
+        if (x + 1 >= cols) {
+            break;
+        }
+        // Column leaving, then column entering (never above ksize^2 values).
+        const size_t out_off =
+            (size_t)clamp_index((int32_t)x - r, cols) * ucn + uc;
+        const size_t in_off =
+            (size_t)clamp_index((int32_t)x + 1 + r, cols) * ucn + uc;
+        for (int i = 0; i < ksize; i++) {
+            const int v = rp[i][out_off];
+            hist[v]--;
+            if (v < med) {
+                below--;
+            }
+        }
+        for (int i = 0; i < ksize; i++) {
+            const int v = rp[i][in_off];
+            hist[v]++;
+            if (v < med) {
+                below++;
+            }
+        }
+    }
+}
+
+void median_blur(struct Mat *dst, const struct Mat *src, int ksize) {
+    ASSERT(dst != src && dst->data != src->data);
+    ASSERT(is_u8_image_type(src));
+    ASSERT(mat_type(dst) == mat_type(src));
+    ASSERT(dst->rows == src->rows && dst->cols == src->cols);
+    ASSERT(ksize >= 3 && ksize <= MEDIAN_MAX_KSIZE && (ksize & 1));
+    if (src->rows == 0 || src->cols == 0) {
+        return;
+    }
+    check_filter_dims(src);
+
+    const int rows = src->rows;
+    const int cols = src->cols;
+    const int cn   = (int)mat_channel_num(src);
+    const int r    = ksize / 2;
+
+    // Scratch: ksize <= 5 needs none (rows go in a small stack array).
+    // Otherwise ksize row pointers + a 256-bin uint16_t histogram.
+    const uchar **rp   = NULL;
+    uint16_t     *hist = NULL;
+    const uchar  *small_rp[5];
+    if (ksize > 5) {
+        const size_t rp_bytes =
+            improc_scratch_mul((size_t)ksize, sizeof(const uchar *));
+        const size_t hist_bytes = improc_scratch_mul(256, sizeof(uint16_t));
+        rp                      = fast_malloc(rp_bytes);
+        hist                    = fast_malloc(hist_bytes);
+        improc_scratch_check((void *const[]){rp, hist}, 2);
+    }
+    const uchar **rows_in = ksize > 5 ? rp : small_rp;
+
+    for (int y = 0; y < rows; y++) {
+        for (int i = 0; i < ksize; i++) {
+            rows_in[i] = mat_row(src, clamp_index((int32_t)y + i - r, rows));
+        }
+        uchar *d = mat_row(dst, y);
+        if (ksize <= 5) {
+            median_small_row(rows_in, d, cols, cn, ksize);
+        } else {
+            for (int c = 0; c < cn; c++) {
+                median_huang_row(rows_in, d, cols, cn, c, ksize, hist);
+            }
+        }
+    }
+
+    fast_free(hist);
+    fast_free(rp);
+}
