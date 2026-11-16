@@ -43,6 +43,8 @@
 
 `box_filter`、`gaussian_blur`、`sobel` 都分成水平與垂直兩個 pass，中間用環形緩衝區 `ring` 銜接，而不是整張暫存影像。`ring` 只有 `nslots = min(視窗列數, rows)` 列（`box`、`gauss` 的視窗是 `ksize`，`sobel` 是 3），列 `y` 放在槽位 `y % nslots`。輸出列 `y` 最多讀連續 `window` 列，所以槽位在它的列還要用的時候不會被覆蓋。`box_filter` 另外保留一條 `uint32_t` 的欄累加 `sum`，並且在補算新列（會覆蓋同一個槽位）之前，先把離開的那一列減掉。三者的 `ring` 型別、捨入方式各不相同，邊界一律使用 reflect 101。圖中並排列出三條流程，並標出各自的暫存大小（`box`：`ksize*n*2 + n*4 + (cols+2r)*cn`；`gauss`：`ksize*n*2 + (cols+2r)*cn`；`sobel`：`3*cols*2 + cols + 2`，單位是位元組），最下方畫出大小檢查與 `improc_scratch_check` 的失敗路徑。更完整的暫存量見 [porting.md](porting.md)。
 
+`median_blur` 不可分離，不在圖中。它的邊界是 replicate（與 `cv2.medianBlur` 相同）：`ksize` 3 用 19 次交換的排序網路，5 用 Wirth 選擇，兩者都不配置暫存；7 以上用 Huang 滑動直方圖，暫存是 `ksize` 個列指標加 512 位元組的直方圖。
+
 對應檔案：`core/filter.c`、`core/improc_internal.h`。
 
 ## 5. resize 座標對應

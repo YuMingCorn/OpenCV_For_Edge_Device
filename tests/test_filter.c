@@ -1,4 +1,6 @@
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "filter.h"
 #include "test_alloc_util.h"
@@ -539,6 +541,163 @@ static void test_scratch_peak(void) {
     free_mat(&dst);
 }
 
+static int clamp_index(int p, int len) {
+    return p < 0 ? 0 : (p >= len ? len - 1 : p);
+}
+
+static int cmp_uchar(const void *a, const void *b) {
+    return (int)*(const uchar *)a - (int)*(const uchar *)b;
+}
+
+// Naive reference: gather the window with replicate border, sort, take the
+// element of rank ksize^2 / 2.
+static void median_reference(struct Mat *dst, const struct Mat *src,
+                             int ksize) {
+    int    cn = (int)mat_channel_num(src);
+    int    r  = ksize / 2;
+    uchar *win = malloc((size_t)ksize * (size_t)ksize);
+    for (int y = 0; y < src->rows; y++) {
+        for (int x = 0; x < src->cols; x++) {
+            for (int c = 0; c < cn; c++) {
+                int n = 0;
+                for (int i = -r; i <= r; i++) {
+                    for (int j = -r; j <= r; j++) {
+                        int yy   = clamp_index(y + i, src->rows);
+                        int xx   = clamp_index(x + j, src->cols);
+                        win[n++] = mat_row(src, yy)[xx * cn + c];
+                    }
+                }
+                qsort(win, (size_t)n, 1, cmp_uchar);
+                mat_row(dst, y)[x * cn + c] = win[n / 2];
+            }
+        }
+    }
+    free(win);
+}
+
+static void median_bytes(int type, int rows, int cols, const uchar *in,
+                         int ksize, const uchar *expected) {
+    struct Mat *src = mat_from_bytes(rows, cols, type, in);
+    struct Mat *dst = alloc_mat(rows, cols, type);
+    median_blur(dst, src, ksize);
+    CHECK_MAT_BYTES(dst, expected);
+    free_mat(&src);
+    free_mat(&dst);
+}
+
+// Hand computed: the impulse is removed, the border replicates.
+static void test_median_impulse_k3(void) {
+    const uchar in[]  = {0, 0, 0, 0, 90, 0, 0, 0, 0};
+    const uchar out[] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+    median_bytes(CV_8UC1, 3, 3, in, 3, out);
+}
+
+// Row 0 window of (0,0) is {1,1,2, 1,1,2, 4,4,5}: sorted 1,1,1,1,2,2,4,4,5.
+static void test_median_ramp_k3(void) {
+    const uchar in[]  = {1, 2, 3, 4, 5, 6, 7, 8, 9};
+    const uchar out[] = {2, 3, 3, 4, 5, 6, 7, 7, 8};
+    median_bytes(CV_8UC1, 3, 3, in, 3, out);
+}
+
+static void test_median_single_row_k3(void) {
+    const uchar in[]  = {9, 1, 8, 2, 7};
+    const uchar out[] = {9, 8, 2, 7, 7};
+    median_bytes(CV_8UC1, 1, 5, in, 3, out);
+}
+
+static void test_median_rgb_k3(void) {
+    // Channels are independent: R {10,200,30}, G {5,5,5}, B {90,80,70}.
+    const uchar in[]  = {10, 5, 90, 200, 5, 80, 30, 5, 70};
+    const uchar out[] = {10, 5, 90, 30, 5, 80, 30, 5, 70};
+    median_bytes(CV_8UC3, 1, 3, in, 3, out);
+}
+
+static void test_median_larger_than_image(void) {
+    // k=7 on 2x2, rank 24 of 49. Pixel (1,1) counts 1:9, 2:12, 3:12, 4:16.
+    const uchar in[]  = {1, 2, 3, 4};
+    const uchar out[] = {2, 2, 3, 3};
+    median_bytes(CV_8UC1, 2, 2, in, 7, out);
+}
+
+static void test_median_constant(void) {
+    uchar in[6 * 5 * 4];
+    memset(in, 77, sizeof in);
+    median_bytes(CV_8UC4, 6, 5, in, 5, in);
+}
+
+static void median_vs_reference(int type, int rows, int cols, int ksize,
+                                unsigned seed) {
+    struct Mat *src = alloc_mat(rows, cols, type);
+    struct Mat *dst = alloc_mat(rows, cols, type);
+    struct Mat *ref = alloc_mat(rows, cols, type);
+    fill_pattern(src, seed);
+    median_blur(dst, src, ksize);
+    median_reference(ref, src, ksize);
+    CHECK_MAT_BYTES(dst, ref->data);
+    free_mat(&src);
+    free_mat(&dst);
+    free_mat(&ref);
+}
+
+static void test_median_width_sweep(void) {
+    const int ks[]    = {3, 5, 7, 15};
+    const int types[] = {CV_8UC1, CV_8UC3, CV_8UC4};
+    for (int t = 0; t < 3; t++) {
+        for (int k = 0; k < 4; k++) {
+            for (int w = 0; w <= 65; w++) {
+                median_vs_reference(types[t], 4, w, ks[k], (unsigned)w);
+            }
+        }
+    }
+}
+
+// Heights below, equal to and above the window, including ksize > rows.
+static void test_median_height_sweep(void) {
+    const int ks[] = {3, 5, 9, 21};
+    for (int k = 0; k < 4; k++) {
+        for (int h = 1; h <= 25; h++) {
+            median_vs_reference(CV_8UC1, h, 13, ks[k], (unsigned)h * 3u);
+        }
+    }
+}
+
+// Every ksize with many equal values (ties) and a large window, which also
+// walks the histogram median across wide empty ranges.
+static void test_median_every_ksize_sparse(void) {
+    for (int k = 3; k <= 255; k += 2) {
+        struct Mat *src = alloc_mat(9, 11, CV_8UC1);
+        struct Mat *dst = alloc_mat(9, 11, CV_8UC1);
+        struct Mat *ref = alloc_mat(9, 11, CV_8UC1);
+        for (int y = 0; y < 9; y++) {
+            for (int x = 0; x < 11; x++) {
+                // Only the values 0, 3 and 255 occur.
+                const uchar v[3]       = {0, 3, 255};
+                mat_row(src, y)[x] = v[(x * 5 + y * 7 + (x * y) % 3) % 3];
+            }
+        }
+        median_blur(dst, src, k);
+        median_reference(ref, src, k);
+        CHECK_MAT_BYTES(dst, ref->data);
+        free_mat(&src);
+        free_mat(&dst);
+        free_mat(&ref);
+    }
+}
+
+static void test_median_extremes_k255(void) {
+    // Window count reaches 255 * 255 = 65025, the largest histogram bin.
+    struct Mat *src = alloc_mat(300, 300, CV_8UC1);
+    struct Mat *dst = alloc_mat(300, 300, CV_8UC1);
+    memset(src->data, 255, (size_t)300 * src->step[0]);
+    median_blur(dst, src, 255);
+    CHECK_MAT_BYTES(dst, src->data);
+    memset(src->data, 0, (size_t)300 * src->step[0]);
+    median_blur(dst, src, 255);
+    CHECK_MAT_BYTES(dst, src->data);
+    free_mat(&src);
+    free_mat(&dst);
+}
+
 int main(void) {
     RUN_TEST(test_box_impulse);
     RUN_TEST(test_box_ramp);
@@ -567,5 +726,15 @@ int main(void) {
     RUN_TEST(test_gauss_stream_sweep);
     RUN_TEST(test_sobel_stream_sweep);
     RUN_TEST(test_scratch_peak);
+    RUN_TEST(test_median_impulse_k3);
+    RUN_TEST(test_median_ramp_k3);
+    RUN_TEST(test_median_single_row_k3);
+    RUN_TEST(test_median_rgb_k3);
+    RUN_TEST(test_median_larger_than_image);
+    RUN_TEST(test_median_constant);
+    RUN_TEST(test_median_width_sweep);
+    RUN_TEST(test_median_height_sweep);
+    RUN_TEST(test_median_every_ksize_sparse);
+    RUN_TEST(test_median_extremes_k255);
     return test_finish();
 }

@@ -14,6 +14,7 @@
 | `pixel.h` | `absdiff` | 兩張影像逐通道相減取絕對值，用於畫面差分（動態偵測） |
 | `pixel.h` | `convert_scale`、`convert_scale_abs` | `src * alpha_q8 / 256 + beta`，結果飽和到 0～255 |
 | `filter.h` | `box_filter`、`gaussian_blur`、`sobel` | 邊界一律 BORDER_REFLECT_101；以逐列滾動的環形緩衝區運作，暫存記憶體只與 `ksize` 和列寬有關；Sobel 輸入灰階、輸出 `CV_16SC1` |
+| `filter.h` | `median_blur` | 中值濾波，`ksize` 為 3～255 的奇數，邊界 BORDER_REPLICATE，結果與 `cv2.medianBlur` 逐位元組相同；`ksize` 3 與 5 用排序網路與選擇法，7 以上用 Huang 滑動直方圖（暫存 256 個 `uint16_t` 加 `ksize` 個列指標） |
 | `morph.h` | `erode`、`dilate`、`morph_open`、`morph_close` | 矩形結構元素，`ksize` 為 1～255 的奇數；視窗超出影像的部分不計入 |
 | `hist.h` | `calc_hist`、`equalize_hist` | 256 階直方圖與直方圖等化 |
 | `hist.h` | `otsu_threshold`、`otsu_threshold_hist` | Otsu 門檻；判準以精確的整數與分數比較，沒有浮點捨入造成的平手 |
@@ -82,7 +83,7 @@ ctest --test-dir build --output-on-failure
 比對腳本需要 Python 3、`opencv-python` 與 `numpy`。先用各測試的 `--dump` 輸出影像，再讓腳本逐運算算出與 OpenCV 的最大差異：
 
 ```sh
-for m in phase1 morph hist color2 camera area f32; do
+for m in phase1 morph hist color2 camera area edge median f32; do
   build/test_kodak_$m --dir datasets/kodak --manifest tests/golden/kodak_$m.txt --dump dump
 done
 python3 tools/compare_opencv.py --dump dump

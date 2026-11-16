@@ -93,7 +93,7 @@ Arduino 與 PlatformIO 的建置不經過 CMake，設定改由 `src/improc_confi
 
 ## 大小與暫存記憶體
 
-大小為 `libimproc_core.a` 各目的檔 `.text`、`.data`、`.bss` 的總和（位元組，`MinSizeRel`），由合併後的完整程式樹（含形態學、直方圖、HSV／YUV、`INTER_AREA`；有 FPU 的目標另含 `convert_to`）執行 `bash tools/check_cross.sh` 取得。ASSERT 會把 `__FILE__` 與運算式字串放進程式，所以原始碼路徑越長數字越大（差距可達數百位元組）；要縮小請開啟 `IMPROC_ASSERT_TERSE`。這是整個函式庫的總和；連結時加 `--gc-sections` 會丟掉沒用到的函式與表格。
+大小為 `libimproc_core.a` 各目的檔 `.text`、`.data`、`.bss` 的總和（位元組，`MinSizeRel`），由合併後的完整程式樹（含形態學、直方圖、HSV／YUV、`INTER_AREA`、中值濾波；有 FPU 的目標另含 `convert_to`）執行 `bash tools/check_cross.sh` 取得。ASSERT 會把 `__FILE__` 與運算式字串放進程式，所以原始碼路徑越長數字越大（差距可達數百位元組）；要縮小請開啟 `IMPROC_ASSERT_TERSE`。這是整個函式庫的總和；連結時加 `--gc-sections` 會丟掉沒用到的函式與表格。
 
 | 目標 | 編譯器版本 | text | data | bss |
 |---|---|---|---|---|
@@ -117,8 +117,8 @@ Cortex-M0+（`-fstack-usage`）最大的五個堆疊框：
 | `convert_scale`（`pixel.c`） | 288 |
 | `resize`（`geometry.c`） | 248 |
 | `otsu_threshold_hist`（`hist.c`） | 208 |
+| `median_blur`（`filter.c`） | 192 |
 | `nonzero_stats`（`hist.c`） | 128 |
-| `gaussian_blur`（`filter.c`） | 128 |
 
 ### 暫存記憶體
 
@@ -132,6 +132,7 @@ Cortex-M0+（`-fstack-usage`）最大的五個堆疊框：
 | `box_filter` | `ksize' * n * 2 + n * 4 + (cols + 2r) * cn` |
 | `gaussian_blur` | `ksize' * n * 2 + (cols + 2r) * cn` |
 | `sobel` | `min(3, rows) * cols * 2 + cols + 2` |
+| `median_blur` | `ksize` 為 3、5：0；7 以上：`ksize * sizeof(void *) + 512` |
 | `erode`、`dilate`、`morph_open`、`morph_close` | `n`（一列；`morph_open`／`morph_close` 另需呼叫端提供一張同尺寸的 `tmp`） |
 | `equalize_hist` | 1280（直方圖 1024 加查表 256） |
 | `otsu_threshold` | 1024 |
@@ -146,7 +147,7 @@ HSV 轉換用兩張 `uint32_t[256]` 的除法表（共 2 KB）。AVR 沒有 `PRO
 
 ## 與 OpenCV 的差異
 
-Kodak 24 張影像、38 個運算與 OpenCV 4.10.0 的逐運算最大差異見 [kodak-results.md](kodak-results.md)。
+Kodak 24 張影像、48 個運算與 OpenCV 4.10.0 的逐運算最大差異見 [kodak-results.md](kodak-results.md)。
 
 ## 已知限制
 

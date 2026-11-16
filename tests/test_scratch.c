@@ -166,6 +166,41 @@ static void test_alloc_failure_filter(void) {
     free_mat(&d16);
 }
 
+static void test_alloc_failure_median(void) {
+    struct Mat *src = alloc_mat(9, 11, CV_8UC3);
+    struct Mat *dst = alloc_mat(9, 11, CV_8UC3);
+    fill_pattern(src, 7);
+    // ksize 3 and 5 select on the stack: no scratch at all.
+    CHECK_ALLOC_FAILURES(median_blur(dst, src, 3), 0);
+    CHECK_ALLOC_FAILURES(median_blur(dst, src, 5), 0);
+    // ksize >= 7: row pointers and the histogram.
+    CHECK_ALLOC_FAILURES(median_blur(dst, src, 7), 2);
+    CHECK_ALLOC_FAILURES(median_blur(dst, src, 255), 2);
+    free_mat(&src);
+    free_mat(&dst);
+}
+
+static void test_median_misuse_asserts(void) {
+    struct Mat *src = alloc_mat(9, 11, CV_8UC3);
+    struct Mat *dst = alloc_mat(9, 11, CV_8UC3);
+    struct Mat *bad = alloc_mat(9, 11, CV_8UC1);
+    struct Mat *odd = alloc_mat(9, 10, CV_8UC3);
+    struct Mat *s16 = alloc_mat(9, 11, CV_16SC1);
+    CHECK_ASSERTS(median_blur(dst, src, 2));
+    CHECK_ASSERTS(median_blur(dst, src, 1));
+    CHECK_ASSERTS(median_blur(dst, src, 257));
+    CHECK_ASSERTS(median_blur(dst, src, -3));
+    CHECK_ASSERTS(median_blur(bad, src, 3)); // type mismatch
+    CHECK_ASSERTS(median_blur(odd, src, 3)); // size mismatch
+    CHECK_ASSERTS(median_blur(src, src, 3)); // in place
+    CHECK_ASSERTS(median_blur(s16, s16, 3));
+    free_mat(&src);
+    free_mat(&dst);
+    free_mat(&bad);
+    free_mat(&odd);
+    free_mat(&s16);
+}
+
 static void test_alloc_failure_morph(void) {
     struct Mat *src = alloc_mat(9, 11, CV_8UC3);
     struct Mat *dst = alloc_mat(9, 11, CV_8UC3);
@@ -235,6 +270,8 @@ int main(void) {
     RUN_TEST(test_wrap_is_caught);
 #endif
     RUN_TEST(test_alloc_failure_filter);
+    RUN_TEST(test_alloc_failure_median);
+    RUN_TEST(test_median_misuse_asserts);
     RUN_TEST(test_alloc_failure_morph);
     RUN_TEST(test_alloc_failure_geometry);
     RUN_TEST(test_alloc_failure_hist);
