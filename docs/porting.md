@@ -79,6 +79,7 @@ ESP32 請用 ESP-IDF 元件，把核心原始檔列進 `idf_component_register`�
 idf_component_register(
     SRCS core/color.c core/pixel.c core/filter.c core/geometry.c
          core/mat.c core/utils.c core/morph.c core/hist.c core/features2d.c
+         core/draw.c
          core/convert_f32.c
     INCLUDE_DIRS core)
 ```
@@ -139,6 +140,7 @@ Cortex-M0+（`-fstack-usage`）最大的五個堆疊框：
 | `resize`（`INTER_NEAREST`、`INTER_LINEAR`） | `dst_cols * (2 * sizeof(int) + 2)` |
 | `resize`（`INTER_AREA`） | `2 * dst_cols * cn * 4` |
 | `fast_detect` | 有非極大值抑制：`3 * cols`（三列分數）；沒有：0。角點陣列由呼叫端提供 |
+| `draw_point`、`draw_line`、`draw_circle`、`draw_text`、`draw_text_width` | 0 |
 
 濾波類運算只保留 `ksize` 列的水平 pass 結果（環形緩衝區），所以暫存記憶體與影像高度無關，只與列寬和 `ksize` 有關。`INTER_AREA` 另外限制來源影像不超過 2^24 個像素，直方圖函式與 `nonzero_stats` 也一樣。
 
@@ -146,9 +148,11 @@ Cortex-M0+（`-fstack-usage`）最大的五個堆疊框：
 
 HSV 轉換用兩張 `uint32_t[256]` 的除法表（共 2 KB）。AVR 沒有 `PROGMEM` 時，`const` 表格會被連結器放進 `.data`，要佔同樣大小的 RAM 與 flash 初值；上表的 `size` 把它們算在 `text`。ATmega328P 只有 2 KB RAM，用不起 HSV。不呼叫 HSV 轉換時，加 `--gc-sections` 會把表格丟掉。
 
+`draw_text` 的點陣字型是一張 `uint8_t[96][5]` 的表（480 位元組：95 個 ASCII 字元加一個替代方框，每個字元 5 欄、每欄 1 byte）。它也是一般的 `const` 表格，在 AVR 上同樣佔 480 位元組 RAM；不呼叫 `draw_text` 時，`--gc-sections` 會把它丟掉。畫線與畫圓只用整數，裁切與開根號用 64 位元整數，AVR 上會連結 libgcc 的 64 位元除法。
+
 ## 與 OpenCV 的差異
 
-Kodak 24 張影像、50 個運算與 OpenCV 4.10.0 的逐運算最大差異見 [kodak-results.md](kodak-results.md)。
+Kodak 24 張影像、53 個運算與 OpenCV 4.10.0 的逐運算最大差異見 [kodak-results.md](kodak-results.md)。
 
 ## 已知限制
 
