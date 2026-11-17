@@ -411,7 +411,7 @@ void process_frame(void) {
 }
 ```
 
-`cvt_color`、`threshold`、`mat_lut`、`convert_scale`、`absdiff`、`flip`、`crop`、`calc_hist`、`otsu_threshold_hist`、`nonzero_stats` 不需要暫存記憶體。濾波（`median_blur` 只在 `ksize` 7 以上）、形態學、`resize`、`equalize_hist`、`otsu_threshold` 與 `fast_detect`（只在開啟非極大值抑制時）會向 `fast_malloc` 要一小塊暫存。SIFT 要的暫存大得多（640×480 預設參數約 34 MB，不放大約 8.6 MB），大小用 `sift_scratch_bytes` 先查。沒有 malloc 時，要用 `improc_set_allocator` 提供自己的配置器，例如固定大小的記憶體池。各運算的暫存大小見 [docs/porting.md](docs/porting.md)。
+`cvt_color`、`threshold`、`mat_lut`、`convert_scale`、`absdiff`、`flip`、`crop`、`calc_hist`、`otsu_threshold_hist`、`nonzero_stats` 不需要暫存記憶體。濾波（`median_blur` 只在 `ksize` 7 以上）、形態學、`resize`、`equalize_hist`、`otsu_threshold`、`fast_detect`（只在開啟非極大值抑制時）、`orb_detect` 與 `match_descriptors`（只在交叉檢查時）會向 `fast_malloc` 要一小塊暫存。沒有 malloc 時，要用 `improc_set_allocator` 提供自己的配置器，例如固定大小的記憶體池。各運算的暫存大小見 [docs/porting.md](docs/porting.md)。
 
 ### 動態偵測
 
@@ -429,6 +429,25 @@ if (s.count > 200) {                            // 變動的像素夠多才算�
     int cy = (int)((s.sum_y + s.count / 2) / s.count);
     // 物體範圍 (s.x_min, s.y_min)～(s.x_max, s.y_max)，座標相對於 ROI
 }
+```
+
+### 特徵點配對
+
+`a`、`b` 是同一場景的兩張灰階畫面（`CV_8UC1`），`sa`、`sb` 是同尺寸的暫存影像。ORB 在兩張圖各找最多 500 個關鍵點，再用描述子配對：
+
+```c
+static struct KeyPoint ka[500], kb[500];
+static uint8_t         da[500][ORB_DESC_BYTES], db[500][ORB_DESC_BYTES];
+static struct DMatch   m[500];
+
+int32_t na = orb_detect(ka, 500, a, 20);   // FAST 門檻 20
+int32_t nb = orb_detect(kb, 500, b, 20);
+gaussian_blur(sa, a, 7);                   // 描述子在平滑後的影像上取樣
+gaussian_blur(sb, b, 7);
+orb_compute(da, ka, na, sa);
+orb_compute(db, kb, nb, sb);
+int32_t nm = match_descriptors(m, da, na, db, nb, 1);  // 交叉檢查
+// m[i].query、m[i].train 是 ka、kb 的索引；m[i].distance 越小越像
 ```
 
 完整的可執行範例是 `main.c`（建置後的 `demo`）。它對一張圖依序跑過所有運算，並各存一張 PNG：
@@ -456,6 +475,8 @@ if (s.count > 200) {                            // 變動的像素夠多才算�
 | `hist.h` | `otsu_threshold`、`otsu_threshold_hist` | Otsu 門檻；判準以精確的整數與分數比較，沒有浮點捨入造成的平手 |
 | `hist.h` | `nonzero_stats` | 二值影像的非零像素數、外接矩形與重心座標總和，用來判斷有沒有物體、在哪裡、多大 |
 | `features2d.h` | `fast_detect` | FAST-9 角點偵測（灰階），可選擇非極大值抑制；角點寫進呼叫端提供的 `struct KeyPoint` 陣列，回傳找到的總數；結果與 `cv2.FastFeatureDetector` 的位置、順序、分數都相同 |
+| `features2d.h` | `orb_detect`、`orb_compute` | ORB 特徵：FAST 角點依 FAST 分數與 Harris 量挑出前 N 個，以強度重心定方向（32 個角度，只用整數），再算 256 位元的旋轉 BRIEF 描述子；取樣點表由專案自己的種子產生器產生，所以描述子不能和 OpenCV 的 ORB 互相配對 |
+| `features2d.h` | `hamming_distance`、`match_descriptors` | 描述子的 Hamming 距離與暴力配對，可選擇交叉檢查 |
 | `geometry.h` | `flip` | 水平、垂直、雙向翻轉 |
 | `geometry.h` | `crop` | 從大圖複製出一塊矩形區域（任何型別），區域大小由 dst 決定 |
 | `geometry.h` | `resize` | `INTER_NEAREST`、`INTER_LINEAR`（半像素中心）與 `INTER_AREA`（整數面積權重，放大縮小皆可） |
