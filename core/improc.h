@@ -12,6 +12,7 @@
 #include "features2d.h"
 #if IMPROC_HAS_FLOAT
 #include "convert_f32.h"
+#include "sift.h"
 #endif
 // lane-append: includes
 

@@ -6,7 +6,7 @@
 
 | 目標 | 內容 | 相依 |
 |---|---|---|
-| `improc_core` | 色彩（含 HSV、YUV）、像素、濾波、形態學、直方圖、幾何（含 `INTER_AREA`）、`CV_32F` 轉換（`convert_to`）、Mat、工具函式 | 只用 libc 的 `memcpy`、`abort` 等；不含 stdio、pthread、檔案 IO |
+| `improc_core` | 色彩（含 HSV、YUV）、像素、濾波、形態學、直方圖、幾何（含 `INTER_AREA`）、`CV_32F` 轉換（`convert_to`）、SIFT、Mat、工具函式 | 只用 libc 的 `memcpy`、`abort` 等；不含 stdio、pthread、檔案 IO |
 | `improc` | `improc_core` 加上圖檔讀寫（`mat_io.c`、stb） | pthread、stdio、檔案系統 |
 
 裸機目標（`CMAKE_SYSTEM_NAME` 為 `Generic`）預設只建 `improc_core`。
@@ -79,11 +79,11 @@ ESP32 請用 ESP-IDF 元件，把核心原始檔列進 `idf_component_register`�
 idf_component_register(
     SRCS core/color.c core/pixel.c core/filter.c core/geometry.c
          core/mat.c core/utils.c core/morph.c core/hist.c core/features2d.c
-         core/convert_f32.c
+         core/convert_f32.c core/sift.c
     INCLUDE_DIRS core)
 ```
 
-`convert_f32.c` 需要 `IMPROC_HAS_FLOAT=1`（ESP32 有單精度 FPU）。沒有 FPU 的目標請不要列入，並定義 `IMPROC_HAS_FLOAT=0`。
+`convert_f32.c` 與 `sift.c` 需要 `IMPROC_HAS_FLOAT=1`（ESP32 有單精度 FPU）。沒有 FPU 的目標請不要列入，並定義 `IMPROC_HAS_FLOAT=0`。
 
 ## 檢查腳本
 
@@ -139,6 +139,8 @@ Cortex-M0+（`-fstack-usage`）最大的五個堆疊框：
 | `resize`（`INTER_NEAREST`、`INTER_LINEAR`） | `dst_cols * (2 * sizeof(int) + 2)` |
 | `resize`（`INTER_AREA`） | `2 * dst_cols * cn * 4` |
 | `fast_detect` | 有非極大值抑制：`3 * cols`（三列分數）；沒有：0。角點陣列由呼叫端提供 |
+| `sift_detect_compute` | `((s + 4) * R * C + 360 + k) * 4`：`s` 為 `n_octave_layers`，`R`×`C` 為第一個 octave 的大小（`upsample` 時為原圖兩倍），`k` 為最大高斯核的半寬加 1（預設參數為 14）。一次只放一個 octave 的高斯影像，DoG 即時相減，不另外存。用 `sift_scratch_bytes` 查詢。關鍵點與描述子陣列由呼叫端提供 |
+| `sift_match` | 0 |
 
 濾波類運算只保留 `ksize` 列的水平 pass 結果（環形緩衝區），所以暫存記憶體與影像高度無關，只與列寬和 `ksize` 有關。`INTER_AREA` 另外限制來源影像不超過 2^24 個像素，直方圖函式與 `nonzero_stats` 也一樣。
 
@@ -148,7 +150,7 @@ HSV 轉換用兩張 `uint32_t[256]` 的除法表（共 2 KB）。AVR 沒有 `PRO
 
 ## 與 OpenCV 的差異
 
-Kodak 24 張影像、50 個運算與 OpenCV 4.10.0 的逐運算最大差異見 [kodak-results.md](kodak-results.md)。
+Kodak 24 張影像、53 個運算與 OpenCV 4.10.0 的逐運算最大差異見 [kodak-results.md](kodak-results.md)。
 
 ## 已知限制
 
