@@ -19,7 +19,7 @@ python3 tools/compare_opencv.py --dump dump
 
 ## 結果
 
-OpenCV 4.10.0，24 張影像，50 個運算，全部在容許誤差內。「差異像素」是所有影像的樣本中與 OpenCV 不同的比例。
+OpenCV 4.10.0，24 張影像，51 個運算，全部在容許誤差內。「差異像素」是所有影像的樣本中與 OpenCV 不同的比例。
 
 | 運算 | 模組 | 最大差異 | 容許 | 差異像素 % | 對照的 OpenCV 呼叫 |
 |---|---|---|---|---|---|
@@ -62,6 +62,7 @@ OpenCV 4.10.0，24 張影像，50 個運算，全部在容許誤差內。「差�
 | `gray_median15` | median | 0 | 0 | 0 | `cv2.medianBlur` 15（我們的灰階） |
 | `fast` | features | 0 | 0 | 0 | `FastFeatureDetector` 9_16，門檻 20，非極大值抑制（角點位置與分數） |
 | `fast_raw` | features | 0 | 0 | 0 | `FastFeatureDetector` 9_16，門檻 20，不抑制（角點位置） |
+| `rot30` | features | 0 | 0 | 0 | 我們自己的 30° 旋轉（同時比對 ORB 的配對品質，見下節） |
 | `edge_gray` | edge | 1 | 1 | 3.6653 | `COLOR_RGB2GRAY` |
 | `crop_center` | edge | 0 | 0 | 0 | numpy 切片（中央一半） |
 | `absdiff_shift` | edge | 0 | 0 | 0 | `cv2.absdiff`（相距 6 像素的兩個畫面） |
@@ -76,3 +77,16 @@ OpenCV 4.10.0，24 張影像，50 個運算，全部在容許誤差內。「差�
 - 相機格式（camera 模組）的輸入不是真的相機畫面：測試把 Kodak 的 RGB 打包成 RGB565 或 YUYV 位元組，再交給解碼函式。`tools/opencv_ref/camera.py` 用同樣的方式打包，再交給 OpenCV。RGB565 與 YUYV 轉 RGB 和 OpenCV 逐 byte 相同；RGB565 轉灰階沿用本專案的灰階公式，所以和 OpenCV 差 1。
 - FAST 的結果是角點清單，不是影像。features 模組把角點畫成同尺寸的 `CV_8UC1` 圖：有非極大值抑制時，角點像素存分數；沒有時存 255；其餘像素為 0。`tools/opencv_ref/features.py` 用 OpenCV 的角點畫出同樣的圖，所以最大差異 0 表示角點的位置與分數都相同。
 - 每個運算的容許誤差寫在 `tools/opencv_ref/*.py`。
+
+## ORB 的配對品質
+
+本專案的 ORB 不和 `cv2.ORB` 逐位元組比對，原因有兩個。第一，256 組取樣點由專案自己的種子產生器產生（`tools/gen_orb_pattern.py`），不是 OpenCV 學習得來的表。第二，方向量化成 32 個角度，只用整數計算，不用 `atan2`。所以這裡比較的是配對品質。
+
+做法：兩邊都對我們的灰階圖和它旋轉 30° 的版本（`rot30`，整數雙線性內插）各取 500 個關鍵點，只用一個尺度，FAST 門檻 20，再用 Hamming 距離做交叉檢查配對。配對點落在真實旋轉位置 3 像素以內，就算正確。`tools/opencv_ref/features.py` 在 `compare_opencv.py` 中逐張檢查，差距不得超過 10 個百分點；直接執行它，會印出逐張表格與總計，總計差距不得超過 3 個百分點。
+
+| | 正確／配對 | 正確比例 | 單張範圍 |
+|---|---|---|---|
+| 本專案 `orb_detect` + `orb_compute` | 7553／7893 | 95.7% | 85.4%～99.5% |
+| `cv2.ORB_create(500, nlevels=1)` | 7905／8246 | 95.9% | 86.1%～99.4% |
+
+正確比例相近，24 張中有 11 張高於 OpenCV。配對數少約 4%。差距最大的是 kodim15（90.5%，OpenCV 98.1%）。兩邊都只用一個尺度，所以都不處理縮放。

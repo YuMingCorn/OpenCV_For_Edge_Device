@@ -237,6 +237,8 @@ static void test_alloc_failure_hist(void) {
 
 static void test_alloc_failure_features(void) {
     static struct KeyPoint kp[64];
+    static uint8_t         d[8][ORB_DESC_BYTES];
+    static struct DMatch   mt[8];
     struct Mat            *src = alloc_mat(50, 61, CV_8UC1);
     fill_pattern(src, 7);
     for (int y = 0; y < 50; y += 5) { // strong corners for FAST
@@ -245,6 +247,11 @@ static void test_alloc_failure_features(void) {
     CHECK((fast_detect(NULL, 0, src, 10, 1)) > 0);
     CHECK_ALLOC_FAILURES((void)fast_detect(kp, 64, src, 10, 1), 1);
     CHECK_ALLOC_FAILURES((void)fast_detect(kp, 64, src, 10, 0), 0);
+    // Count pass, then ring + corners + ranks for the fill pass.
+    CHECK_ALLOC_FAILURES((void)orb_detect(kp, 64, src, 10), 4);
+    memset(d, 0x3C, sizeof d);
+    CHECK_ALLOC_FAILURES((void)match_descriptors(mt, d, 8, d, 8, 1), 1);
+    CHECK_ALLOC_FAILURES((void)match_descriptors(mt, d, 8, d, 8, 0), 0);
     free_mat(&src);
 }
 
