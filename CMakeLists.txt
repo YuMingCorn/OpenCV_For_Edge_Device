@@ -25,6 +25,7 @@ option(IMPROC_NO_MALLOC "No default allocator; alloc_mat/free_mat not compiled" 
 option(IMPROC_ENABLE_FLOAT "Compile the float sources (IMPROC_HAS_FLOAT=1)" ON)
 option(IMPROC_ASSERT_TERSE "ASSERT passes NULL, NULL, line to the handler" OFF)
 option(IMPROC_WERROR "Treat compiler warnings as errors" OFF)
+option(IMPROC_NO_SIMD "Scalar loops only, no SSE2/NEON paths" OFF)
 set(IMPROC_KODAK_DIR "${PROJECT_SOURCE_DIR}/datasets/kodak"
     CACHE PATH "Directory holding kodim01.png ... kodim24.png")
 
@@ -99,6 +100,9 @@ if(IMPROC_NO_MALLOC AND NOT IMPROC_CORE_ONLY)
         "IMPROC_NO_MALLOC=ON requires IMPROC_CORE_ONLY=ON: the hosted image "
         "IO, demo, benchmark and tests allocate with alloc_mat/free_mat.")
 endif()
+if(IMPROC_NO_SIMD)
+    target_compile_definitions(improc_core PUBLIC IMPROC_NO_SIMD=1)
+endif()
 if(IMPROC_NO_STDIO)
     target_compile_definitions(improc_core PUBLIC IMPROC_NO_STDIO=1)
 endif()
@@ -137,6 +141,15 @@ target_link_libraries(demo PRIVATE improc)
 add_executable(bench_gray benchmarks/bench_gray.c)
 improc_warnings(bench_gray)
 target_link_libraries(bench_gray PRIVATE improc)
+
+add_executable(bench_ops benchmarks/bench_ops.c)
+improc_warnings(bench_ops)
+target_link_libraries(bench_ops PRIVATE improc)
+
+# Raw-file runner for tools/sweep_opencv.py.
+add_executable(improc_probe tools/improc_probe.c)
+improc_warnings(improc_probe)
+target_link_libraries(improc_probe PRIVATE improc)
 
 enable_testing()
 

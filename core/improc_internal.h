@@ -42,6 +42,13 @@ int64_t improc_harris_measure(const struct Mat *src, int x, int y);
 // margin.
 int32_t improc_orb_angle(const struct Mat *src, int x, int y);
 
+// ---- resize coordinates (geometry.c), exposed for tests -------------------
+
+// Source index and Q11 weights of pixels index and index + 1 that resize uses
+// for destination index dx (area: INTER_AREA upscaling; clamp: the x axis).
+void improc_resize_coord(int dx, int sw, int dw, int area, int clamp, int *x0,
+                         uint16_t *a0, uint16_t *a1);
+
 // ---- 128-bit helpers for the exact Otsu comparison (hist.c) ----------------
 
 struct improc_u128 {

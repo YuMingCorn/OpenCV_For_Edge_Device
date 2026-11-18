@@ -186,9 +186,11 @@ static void test_convert_scale_c3(void) {
     free_mat(&dst);
 }
 
+// Expected values match cv2.addWeighted(x, alpha / 256, x, 0, beta), which
+// rounds half to even: 10.5 -> 10, 11.5 -> 12, 1.5 -> 2, 4.5 -> 4.
 static void test_convert_scale_values(void) {
     const uchar a[]   = {0, 1, 2, 3, 255};
-    const uchar a_o[] = {10, 11, 11, 12, 138};
+    const uchar a_o[] = {10, 10, 11, 12, 138};
     scale_c1(128, 10, 5, a, a_o);
     const uchar b[]   = {0, 1, 255};
     const uchar b_o[] = {255, 254, 0};
@@ -197,7 +199,7 @@ static void test_convert_scale_values(void) {
     const uchar c_o[] = {0, 0, 0, 1, 155};
     scale_c1(256, -100, 5, c, c_o);
     const uchar d[]   = {0, 1, 2, 3, 170, 171};
-    const uchar d_o[] = {0, 2, 3, 5, 255, 255};
+    const uchar d_o[] = {0, 2, 3, 4, 255, 255};
     scale_c1(384, 0, 6, d, d_o);
 }
 
@@ -221,12 +223,14 @@ static void abs_c1(int alpha, int beta, int n, const int16_t *in,
     free_mat(&dst);
 }
 
+// Expected values match cv2.convertScaleAbs; halves round to even, so
+// |-1 * 0.5| = 0.5 -> 0 and |-3 * 0.5| = 1.5 -> 2.
 static void test_convert_scale_abs_values(void) {
     const int16_t a[]   = {-300, -255, -1, 0, 1, 255, 300, -32768};
     const uchar   a_o[] = {255, 255, 1, 0, 1, 255, 255, 255};
     abs_c1(256, 0, 8, a, a_o);
     const int16_t b[]   = {-3, -1, 1, 3, 510, -510};
-    const uchar   b_o[] = {2, 1, 1, 2, 255, 255};
+    const uchar   b_o[] = {2, 0, 0, 2, 255, 255};
     abs_c1(128, 0, 6, b, b_o);
     const int16_t c[]   = {-400, 400, 1020, -1020};
     const uchar   c_o[] = {100, 100, 255, 255};
@@ -238,7 +242,7 @@ static void test_convert_scale_abs_values(void) {
 
 static void test_convert_scale_abs_c3(void) {
     const int16_t in[]  = {-3, 3, -1, 1, 510, -510};
-    const uchar   out[] = {2, 2, 1, 1, 255, 255};
+    const uchar   out[] = {2, 2, 0, 0, 255, 255};
     struct Mat   *src   = mat_from_bytes(1, 2, CV_16SC3, in);
     struct Mat   *dst   = alloc_mat(1, 2, CV_8UC3);
     convert_scale_abs(dst, src, 128, 0);

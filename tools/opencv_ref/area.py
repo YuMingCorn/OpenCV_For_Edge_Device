@@ -19,7 +19,7 @@ def _area(rows_fn, cols_fn):
 OPS = {
     "area_half": (_area(lambda r: r // 2, lambda w: w // 2), 0, "INTER_AREA"),
     "area_third": (_area(lambda r: r // 3, lambda w: w // 3), 1, "INTER_AREA"),
-    "area_quarter": (_area(lambda r: r // 4, lambda w: w // 4), 1, "INTER_AREA"),
+    "area_quarter": (_area(lambda r: r // 4, lambda w: w // 4), 0, "INTER_AREA"),
     "area_nonint": (_area(lambda r: r * 5 // 12 + 1, lambda w: w * 3 // 7), 1, "INTER_AREA"),
-    "area_up_1_5": (_area(lambda r: r * 3 // 2, lambda w: w * 3 // 2), 1, "INTER_AREA"),
+    "area_up_1_5": (_area(lambda r: r * 3 // 2, lambda w: w * 3 // 2), 0, "INTER_AREA"),
 }

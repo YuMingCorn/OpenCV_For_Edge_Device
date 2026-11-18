@@ -1,9 +1,14 @@
 #include "filter.h"
 
 #include <stdint.h>
+#include <string.h>
 
 #include "improc_internal.h"
+#include "improc_simd.h"
 #include "utils.h"
+#if IMPROC_SIMD
+#include "median_net.h"
+#endif
 
 // Largest rows or cols the filters accept. Keeps every int32_t coordinate
 // expression below (y + r + 1, cols + 2r) inside int32_t. On a target with a
@@ -35,14 +40,25 @@ static int is_u8_image_type(const struct Mat *m) {
 
 // Copies one row into pad, extending r pixels on each side with reflect 101.
 // pad holds (cols + 2r) * cn bytes.
+static void pad_px(const uchar *restrict s, uchar *restrict q, int32_t x,
+                   int cols, int cn) {
+    const uchar *p = s + (size_t)border_reflect_101(x, cols) * (size_t)cn;
+    for (int c = 0; c < cn; c++) {
+        q[c] = p[c];
+    }
+}
+
 static void pad_row(const uchar *restrict s, uchar *restrict pad, int cols,
                     int cn, int r) {
-    uchar *q = pad;
-    for (int32_t x = -r; x < (int32_t)cols + r; x++, q += cn) {
-        const uchar *p = s + (size_t)border_reflect_101(x, cols) * (size_t)cn;
-        for (int c = 0; c < cn; c++) {
-            q[c] = p[c];
-        }
+    const size_t ucn = (size_t)cn;
+    // The middle cols pixels are a plain copy; only the 2r border pixels need
+    // the reflection.
+    memcpy(pad + (size_t)r * ucn, s, (size_t)cols * ucn);
+    for (int32_t x = -r; x < 0; x++) {
+        pad_px(s, pad + (size_t)(x + r) * ucn, x, cols, cn);
+    }
+    for (int32_t x = cols; x < (int32_t)cols + r; x++) {
+        pad_px(s, pad + (size_t)(x + r) * ucn, x, cols, cn);
     }
 }
 
@@ -86,10 +102,33 @@ static void colsum_sub(uint32_t *restrict sum, const uint16_t *restrict t,
     }
 }
 
+// round(sum / area) without a division: q = floor(n / area) for
+// n = sum + area / 2 is floor(n * m / 2^shift), with 2^(L-1) < area <= 2^L,
+// shift = 8 + 2L and m = floor(2^shift / area) + 1. Proof: m * area = 2^shift
+// + e with 0 < e <= area, so n * m / 2^shift = n / area + n e / (area
+// 2^shift), and n < 256 * area <= 2^(8+L) makes the second term below
+// 2^-L <= 1 / area, too small to reach the next integer. n * m < 2^50.
+struct BoxDiv {
+    uint64_t m;
+    int      shift;
+};
+
+static struct BoxDiv box_div(uint32_t area) {
+    int L = 0;
+    while (((uint32_t)1 << L) < area) {
+        L++;
+    }
+    struct BoxDiv q;
+    q.shift = 8 + 2 * L;
+    q.m     = (((uint64_t)1 << q.shift) / area) + 1;
+    return q;
+}
+
 static void box_vrow(const uint32_t *restrict sum, uchar *restrict d, size_t n,
-                     uint32_t area) {
+                     uint32_t area, struct BoxDiv q) {
+    const uint32_t half = area / 2;
     for (size_t i = 0; i < n; i++) {
-        d[i] = (uchar)((sum[i] + area / 2) / area);
+        d[i] = (uchar)(((uint64_t)(sum[i] + half) * q.m) >> q.shift);
     }
 }
 
@@ -135,9 +174,10 @@ void box_filter(struct Mat *dst, const struct Mat *src, int ksize) {
         colsum_add(
             sum, ring + ring_slot(border_reflect_101(i, rows), nslots, un), un);
     }
-    const uint32_t area = (uint32_t)ksize * (uint32_t)ksize;
+    const uint32_t      area = (uint32_t)ksize * (uint32_t)ksize;
+    const struct BoxDiv div  = box_div(area);
     for (int y = 0; y < rows; y++) {
-        box_vrow(sum, mat_row(dst, y), un, area);
+        box_vrow(sum, mat_row(dst, y), un, area, div);
         // Subtract the outgoing row before its slot can be overwritten.
         colsum_sub(
             sum, ring + ring_slot(border_reflect_101(y - r, rows), nslots, un),
@@ -159,34 +199,94 @@ void box_filter(struct Mat *dst, const struct Mat *src, int ksize) {
     fast_free(ring);
 }
 
-static const int gauss_weights[4][7] = {
-    {256, 0, 0, 0, 0, 0, 0},
-    {64, 128, 64, 0, 0, 0, 0},
-    {16, 64, 96, 64, 16, 0, 0},
-    {8, 28, 56, 72, 56, 28, 8},
+// Gaussian weights divided by their common factor: the original kernels are
+// 256 * {1}, 64 * {1,2,1}, 16 * {1,4,6,4,1} and 4 * {2,7,14,18,14,7,2}, each
+// summing to 256, and the old result was (sum of w_y w_x p + 32768) >> 16.
+// With the reduced weights that equals (S + bias) >> shift exactly, where S is
+// the reduced 2D sum. For ksize <= 5, S <= 65280 and S + bias <= 65408, so
+// both passes fit uint16_t; ksize 7 accumulates the vertical pass in 32 bits.
+static const struct {
+    uint16_t w[7];
+    uint32_t bias;
+    int      shift;
+} gauss_kernels[4] = {
+    {{1}, 0, 0},
+    {{1, 2, 1}, 8, 4},
+    {{1, 4, 6, 4, 1}, 128, 8},
+    {{2, 7, 14, 18, 14, 7, 2}, 2048, 12},
 };
 
-// Weighted horizontal pass. Largest sum is 256 * 255, which fits uint16_t.
+// Horizontal pass with the reduced weights: at most 64 * 255, fits uint16_t.
 static void gauss_hrow(const uchar *restrict pad, uint16_t *restrict out,
-                       int width, int cn, const int *w, int ksize) {
-    size_t n = (size_t)width * (size_t)cn;
-    for (size_t i = 0; i < n; i++) {
+                       int width, int cn, const uint16_t *w, int ksize) {
+    size_t n   = (size_t)width * (size_t)cn;
+    size_t ucn = (size_t)cn;
+    size_t i   = 0;
+#if IMPROC_SIMD
+    for (; i + 16 <= n; i += 16) {
+        v_u16 lo = v_dup_u16(0), hi = v_dup_u16(0);
+        for (size_t k = 0; k < (size_t)ksize; k++) {
+            v_u8  p = v_ld_u8(pad + i + k * ucn);
+            v_u16 c = v_dup_u16(w[k]);
+            lo      = v_add_u16(lo, v_mul_u16(v_lo_u8(p), c));
+            hi      = v_add_u16(hi, v_mul_u16(v_hi_u8(p), c));
+        }
+        v_st_u16(out + i, lo);
+        v_st_u16(out + i + 8, hi);
+    }
+#endif
+    for (; i < n; i++) {
         unsigned acc = 0;
         for (size_t k = 0; k < (size_t)ksize; k++) {
-            acc += (unsigned)w[k] * pad[i + k * (size_t)cn];
+            acc += (unsigned)w[k] * pad[i + k * ucn];
         }
         out[i] = (uint16_t)acc;
     }
 }
 
 static void gauss_vrow(const uint16_t *const *restrict rows_in,
-                       uchar *restrict d, size_t n, const int *w, int ksize) {
-    for (size_t i = 0; i < n; i++) {
-        uint32_t acc = 0;
+                       uchar *restrict d, size_t n, const uint16_t *w,
+                       int ksize, uint32_t bias, int shift) {
+    size_t i = 0;
+#if IMPROC_SIMD
+    if (ksize <= 5) {
+        const v_u16 vb = v_dup_u16((uint16_t)bias);
+        for (; i + 16 <= n; i += 16) {
+            v_u16 lo = vb, hi = vb;
+            for (int k = 0; k < ksize; k++) {
+                v_u16 c = v_dup_u16(w[k]);
+                lo      = v_add_u16(lo, v_mul_u16(v_ld_u16(rows_in[k] + i), c));
+                hi = v_add_u16(hi, v_mul_u16(v_ld_u16(rows_in[k] + i + 8), c));
+            }
+            if (shift == 4) {
+                lo = v_shr_u16(lo, 4);
+                hi = v_shr_u16(hi, 4);
+            } else if (shift == 8) {
+                lo = v_shr_u16(lo, 8);
+                hi = v_shr_u16(hi, 8);
+            }
+            v_st_u8(d + i, v_narrow_u16(lo, hi));
+        }
+    } else {
+        // ksize 7: S reaches 4096 * 255, so the sums are 32-bit.
+        for (; i + 16 <= n; i += 16) {
+            v_u32 a0 = v_dup_u32(bias), a1 = a0, a2 = a0, a3 = a0;
+            for (int k = 0; k < ksize; k++) {
+                v_mla_u16_u32(&a0, &a1, v_ld_u16(rows_in[k] + i), w[k]);
+                v_mla_u16_u32(&a2, &a3, v_ld_u16(rows_in[k] + i + 8), w[k]);
+            }
+            v_u16 lo = v_narrow_u32(v_shr_u32(a0, 12), v_shr_u32(a1, 12));
+            v_u16 hi = v_narrow_u32(v_shr_u32(a2, 12), v_shr_u32(a3, 12));
+            v_st_u8(d + i, v_narrow_u16(lo, hi));
+        }
+    }
+#endif
+    for (; i < n; i++) {
+        uint32_t acc = bias;
         for (int k = 0; k < ksize; k++) {
             acc += (uint32_t)w[k] * rows_in[k][i];
         }
-        d[i] = (uchar)((acc + 32768u) >> 16);
+        d[i] = (uchar)(acc >> shift);
     }
 }
 
@@ -201,13 +301,13 @@ void gaussian_blur(struct Mat *dst, const struct Mat *src, int ksize) {
     }
     check_filter_dims(src);
 
-    const int    rows   = src->rows;
-    const int    cn     = (int)mat_channel_num(src);
-    const int    n      = src->cols * cn;
-    const int    r      = ksize / 2;
-    const int   *w      = gauss_weights[r];
-    const int    nslots = ksize < rows ? ksize : rows;
-    const size_t un     = (size_t)n;
+    const int       rows   = src->rows;
+    const int       cn     = (int)mat_channel_num(src);
+    const int       n      = src->cols * cn;
+    const int       r      = ksize / 2;
+    const uint16_t *w      = gauss_kernels[r].w;
+    const int       nslots = ksize < rows ? ksize : rows;
+    const size_t    un     = (size_t)n;
 
     // Scratch: ring ksize*n*2 + pad (cols+2r)*cn, overflow checked.
     const size_t ring_bytes = improc_scratch_mul(
@@ -232,7 +332,8 @@ void gaussian_blur(struct Mat *dst, const struct Mat *src, int ksize) {
                 ring + ring_slot(border_reflect_101((int32_t)y + k - r, rows),
                                  nslots, un);
         }
-        gauss_vrow(in, mat_row(dst, y), un, w, ksize);
+        gauss_vrow(in, mat_row(dst, y), un, w, ksize, gauss_kernels[r].bias,
+                   gauss_kernels[r].shift);
     }
 
     fast_free(pad);
@@ -383,12 +484,13 @@ static uchar median_select(uchar *a, int n, int k) {
     return a[k];
 }
 
-// ksize 3 or 5: gathers each window (replicate border) and selects. rp holds
-// the ksize source rows, already clamped to the image.
-static void median_small_row(const uchar *const *rp, uchar *restrict d,
-                             int cols, int cn, int ksize) {
+// ksize 3 or 5: gathers each window (replicate border) and selects, for
+// columns x0 <= x < x1. rp holds the ksize source rows, already clamped to the
+// image.
+static void median_small_cols(const uchar *const *rp, uchar *restrict d,
+                              int cols, int cn, int ksize, int x0, int x1) {
     const int r = ksize / 2;
-    for (int x = 0; x < cols; x++) {
+    for (int x = x0; x < x1; x++) {
         // Byte offsets as size_t: cols * cn may exceed a 16-bit int.
         size_t xs[5];
         for (int j = 0; j < ksize; j++) {
@@ -405,6 +507,80 @@ static void median_small_row(const uchar *const *rp, uchar *restrict d,
             d[(size_t)x * (size_t)cn + (size_t)c] =
                 ksize == 3 ? median_of_9(w) : median_select(w, 25, 12);
         }
+    }
+}
+
+#if IMPROC_SIMD
+// One comparator of a generated network on vectors w[]: min to wire i, max to
+// wire j, each only when a later comparator or the output reads it.
+#define MEDIAN_CE(i, j, use)                                                   \
+    do {                                                                       \
+        v_u8 a_ = w[i], b_ = w[j];                                             \
+        if ((use) & 1) {                                                       \
+            w[i] = v_min_u8(a_, b_);                                           \
+        }                                                                      \
+        if ((use) & 2) {                                                       \
+            w[j] = v_max_u8(a_, b_);                                           \
+        }                                                                      \
+    } while (0);
+
+// Vector median for the columns whose window lies inside the row: 16 bytes at
+// a time, each byte an independent (pixel, channel) whose neighbours sit cn
+// bytes apart. The comparator networks come from tools/gen_median_net.py.
+// Returns the first column left for the scalar code, or r when the interior
+// is narrower than one vector.
+#define MEDIAN_SIMD_BODY(K, NET)                                               \
+    do {                                                                       \
+        for (size_t j = lo;; j += 16) {                                        \
+            if (j + 16 > hi) {                                                 \
+                j = hi - 16; /* last block overlaps the previous one */        \
+            }                                                                  \
+            v_u8 w[K * K];                                                     \
+            for (int i = 0; i < K; i++) {                                      \
+                const uchar *p = rp[i] + j - lo;                               \
+                for (int t = 0; t < K; t++, p += ucn) {                        \
+                    w[i * K + t] = v_ld_u8(p);                                 \
+                }                                                              \
+            }                                                                  \
+            NET(MEDIAN_CE) v_st_u8(d + j, w[(K * K) / 2]);                     \
+            if (j + 16 >= hi) {                                                \
+                break;                                                         \
+            }                                                                  \
+        }                                                                      \
+    } while (0)
+
+static int median_small_simd(const uchar *const *rp, uchar *restrict d,
+                             int cols, int cn, int ksize) {
+    const int    r   = ksize / 2;
+    const size_t ucn = (size_t)cn;
+    const size_t lo  = (size_t)r * ucn;
+    const size_t hi  = (size_t)(cols - r) * ucn; // cols > 2r checked by caller
+    if (hi - lo < 16) {
+        return r;
+    }
+    if (ksize == 3) {
+        MEDIAN_SIMD_BODY(3, MEDIAN9_NET);
+    } else {
+        MEDIAN_SIMD_BODY(5, MEDIAN25_NET);
+    }
+    return cols - r;
+}
+#endif
+
+static void median_small_row(const uchar *const *rp, uchar *restrict d,
+                             int cols, int cn, int ksize) {
+    const int r    = ksize / 2;
+    int       done = 0; // columns [r, done) already written
+#if IMPROC_SIMD
+    if (cols > 2 * r) {
+        done = median_small_simd(rp, d, cols, cn, ksize);
+    }
+#endif
+    if (done > r) {
+        median_small_cols(rp, d, cols, cn, ksize, 0, r);
+        median_small_cols(rp, d, cols, cn, ksize, done, cols);
+    } else {
+        median_small_cols(rp, d, cols, cn, ksize, 0, cols);
     }
 }
 

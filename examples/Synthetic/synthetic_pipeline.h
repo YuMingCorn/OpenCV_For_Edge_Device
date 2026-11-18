@@ -24,9 +24,9 @@ enum SynthStep {
 
 // Expected values, produced on the PC (Windows, Linux, qemu-aarch64 agree).
 static const uint32_t synth_expected_hash_hi[SYNTH_STEP_COUNT] = {
-    0x79f4763eu, 0xcbd0b7d9u, 0x26f5ae5fu, 0xe095efb4u};
+    0x79f4763eu, 0x4a860fb5u, 0x4140a22fu, 0xc9f495cau};
 static const uint32_t synth_expected_hash_lo[SYNTH_STEP_COUNT] = {
-    0x350d17cau, 0x212d14f0u, 0x706f05ecu, 0x779a31abu};
+    0x350d17cau, 0x925d7afau, 0x4669f2f8u, 0xa9072319u};
 #define SYNTH_EXPECTED_OTSU 127
 
 struct SynthResult {
