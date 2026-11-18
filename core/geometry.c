@@ -3,6 +3,7 @@
 
 #include "geometry.h"
 #include "improc_internal.h"
+#include "improc_simd.h"
 #include "utils.h"
 
 static void flip_h_row(const uchar *restrict s, uchar *restrict d, int width,
@@ -84,23 +85,46 @@ struct LinearWeights {
     uint16_t a1; // weight of pixel i + 1
 };
 
-static void resize_linear_row(const uchar *restrict r0,
-                              const uchar *restrict r1, uchar *restrict d,
-                              int dst_w, int cn, const int *x0, const int *x1,
-                              const struct LinearWeights *ax,
-                              struct LinearWeights by) {
-    for (int x = 0; x < dst_w; x++, d += cn) {
-        const uchar *p0 = r0 + (size_t)x0[x] * (size_t)cn;
-        const uchar *p1 = r0 + (size_t)x1[x] * (size_t)cn;
-        const uchar *q0 = r1 + (size_t)x0[x] * (size_t)cn;
-        const uchar *q1 = r1 + (size_t)x1[x] * (size_t)cn;
+// Horizontal pass of one source row: h[x * cn + c] = (a0 p0 + a1 p1) >> 4,
+// the only form the vertical step reads. At most 255 * 2049 >> 4 = 32655, so
+// int16_t.
+static void linear_hrow(const uchar *restrict s, int16_t *restrict h,
+                        int dst_w, int cn, const int *x0, const int *x1,
+                        const struct LinearWeights *ax) {
+    for (int x = 0; x < dst_w; x++, h += cn) {
+        const uchar *p0 = s + (size_t)x0[x] * (size_t)cn;
+        const uchar *p1 = s + (size_t)x1[x] * (size_t)cn;
         int32_t      a0 = ax[x].a0, a1 = ax[x].a1;
         for (int c = 0; c < cn; c++) {
-            int32_t top = p0[c] * a0 + p1[c] * a1;
-            int32_t bot = q0[c] * a0 + q1[c] * a1;
-            int32_t t   = (((top >> 4) * by.a0) >> 16) + (((bot >> 4) * by.a1) >> 16);
-            d[c]        = (uchar)((t + 2) >> 2);
+            h[c] = (int16_t)((p0[c] * a0 + p1[c] * a1) >> 4);
         }
+    }
+}
+
+// Vertical step: ((h0 * b0) >> 16) + ((h1 * b1) >> 16), then (t + 2) >> 2.
+// Every term is non-negative and t <= 1021.
+static void linear_vrow(const int16_t *restrict h0, const int16_t *restrict h1,
+                        uchar *restrict d, size_t n, struct LinearWeights by) {
+    const int32_t b0 = by.a0, b1 = by.a1;
+    size_t        i  = 0;
+#if IMPROC_SIMD
+    const v_u16 vb0 = v_dup_u16((uint16_t)b0), vb1 = v_dup_u16((uint16_t)b1);
+    const v_u16 two = v_dup_u16(2);
+    for (; i + 16 <= n; i += 16) {
+        const uint16_t *u0 = (const uint16_t *)h0 + i;
+        const uint16_t *u1 = (const uint16_t *)h1 + i;
+        v_u16 lo = v_add_u16(v_mulhi_i16(v_ld_u16(u0), vb0),
+                             v_mulhi_i16(v_ld_u16(u1), vb1));
+        v_u16 hi = v_add_u16(v_mulhi_i16(v_ld_u16(u0 + 8), vb0),
+                             v_mulhi_i16(v_ld_u16(u1 + 8), vb1));
+        lo       = v_shr_u16(v_add_u16(lo, two), 2);
+        hi       = v_shr_u16(v_add_u16(hi, two), 2);
+        v_st_u8(d + i, v_narrow_u16(lo, hi));
+    }
+#endif
+    for (; i < n; i++) {
+        int32_t t = ((h0[i] * b0) >> 16) + ((h1[i] * b1) >> 16);
+        d[i]      = (uchar)((t + 2) >> 2);
     }
 }
 
@@ -309,10 +333,33 @@ static void area_row_h(const uchar *restrict s, uint32_t *restrict out,
     }
 }
 
+// Exact 2x2 reduction: each output is (a + b + c + d + 2) >> 2, the half-up
+// mean OpenCV's vector path gives for this case. No scratch.
+static void resize_area_half(struct Mat *dst, const struct Mat *src) {
+    const size_t ucn = mat_channel_num(src);
+    for (int y = 0; y < dst->rows; y++) {
+        const uchar *s0 = mat_row(src, 2 * y);
+        const uchar *s1 = mat_row(src, 2 * y + 1);
+        uchar       *d  = mat_row(dst, y);
+        for (int x = 0; x < dst->cols;
+             x++, s0 += 2 * ucn, s1 += 2 * ucn, d += ucn) {
+            for (size_t c = 0; c < ucn; c++) {
+                unsigned v = (unsigned)s0[c] + s0[c + ucn] + s1[c] + s1[c + ucn];
+                d[c]       = (uchar)((v + 2u) >> 2);
+            }
+        }
+    }
+}
+
 static void resize_area(struct Mat *dst, const struct Mat *src) {
     int dw = dst->cols, dh = dst->rows, sw = src->cols, sh = src->rows;
     int cn = (int)mat_channel_num(src);
     ASSERT((uint64_t)sw * (uint64_t)sh <= AREA_MAX_SRC_PIXELS);
+
+    if ((int32_t)sw == 2 * (int32_t)dw && (int32_t)sh == 2 * (int32_t)dh) {
+        resize_area_half(dst, src);
+        return;
+    }
 
     // Scratch: two rows of dw*cn uint32_t = 2*dw*cn*4, overflow checked.
     size_t    n    = improc_scratch_mul((size_t)dw, (size_t)cn);
@@ -322,10 +369,8 @@ static void resize_area(struct Mat *dst, const struct Mat *src) {
     uint32_t *hrow = bufs;
     uint32_t *acc  = bufs + n;
     uint32_t  den  = (uint32_t)sw * (uint32_t)sh;
-    // OpenCV rounds the mean half to even (cvRound of a float), except an
-    // exact 2x2 reduction, whose vector path adds 2 and shifts.
-    int half_even = !((int32_t)sw == 2 * (int32_t)dw &&
-                      (int32_t)sh == 2 * (int32_t)dh);
+    // OpenCV rounds the mean half to even (cvRound of a float); the exact 2x2
+    // reduction, which rounds half up, was handled above.
 
     uint64_t src_h  = (uint64_t)sh;
     uint64_t dst_h  = (uint64_t)dh;
@@ -357,15 +402,50 @@ static void resize_area(struct Mat *dst, const struct Mat *src) {
         for (size_t i = 0; i < n; i++) {
             uint32_t q = acc[i] / den;
             uint32_t r = acc[i] - q * den;
-            if (half_even) {
-                q += r > den - r || (r == den - r && (q & 1u));
-            } else {
-                q += r >= den - r;
-            }
+            q += r > den - r || (r == den - r && (q & 1u));
             d[i] = (uchar)q;
         }
     }
     fast_free(bufs);
+}
+
+// Linear kernel (INTER_LINEAR, or INTER_AREA when an axis grows). Each source
+// row's horizontal pass is computed once and kept in one of two buffers, so
+// consecutive output rows that read the same source rows reuse it. hbuf holds
+// two rows of dst->cols * channels values.
+static void resize_linear(struct Mat *dst, const struct Mat *src, int area,
+                          int *x0, int *x1, struct LinearWeights *ax,
+                          int16_t *hbuf) {
+    int      dw = dst->cols, dh = dst->rows, sw = src->cols, sh = src->rows;
+    int      cn = (int)mat_channel_num(src);
+    size_t   n  = (size_t)dw * (size_t)cn; // checked by the caller's scratch size
+    int16_t *slot[2] = {hbuf, hbuf + n};
+    int      tag[2]  = {-1, -1}; // source row held by each slot
+
+    for (int x = 0; x < dw; x++) {
+        linear_coord(x, sw, dw, area, 1, &x0[x], &ax[x]);
+        x1[x] = x0[x] + 1 < sw ? x0[x] + 1 : sw - 1;
+    }
+    for (int y = 0; y < dh; y++) {
+        int                  y0;
+        struct LinearWeights fy;
+        linear_coord(y, sh, dh, area, 0, &y0, &fy);
+        int y1 = y0 + 1 < sh ? y0 + 1 : sh - 1;
+        y0     = y0 < 0 ? 0 : y0;
+        const int16_t *h[2];
+        for (int k = 0; k < 2; k++) {
+            int row = k == 0 ? y0 : y1;
+            int s   = tag[0] == row ? 0 : tag[1] == row ? 1 : -1;
+            if (s < 0) {
+                // Refill a slot that does not hold the other row needed now.
+                s = (k == 1 && tag[0] == y0) ? 1 : 0;
+                linear_hrow(mat_row(src, row), slot[s], dw, cn, x0, x1, ax);
+                tag[s] = row;
+            }
+            h[k] = slot[s];
+        }
+        linear_vrow(h[0], h[1], mat_row(dst, y), n, fy);
+    }
 }
 
 void resize(struct Mat *dst, const struct Mat *src, int interpolation) {
@@ -392,16 +472,30 @@ void resize(struct Mat *dst, const struct Mat *src, int interpolation) {
     int dw = dst->cols, dh = dst->rows, sw = src->cols, sh = src->rows;
     int cn = (int)mat_channel_num(src);
 
-    // Scratch: coordinate tables 2*dw*sizeof(int) + dw*4, overflow checked.
-    // Both sizes are computed before the first allocation, so an overflow
+    // Scratch: coordinate tables 2*dw*sizeof(int) + dw*4, and for the linear
+    // kernel two rows of horizontal sums, 2*dw*cn*2 bytes; overflow checked.
+    // Every size is computed before the first allocation, so an overflow
     // ASSERT cannot leave a block behind.
     const size_t xs_bytes =
         improc_scratch_mul(improc_scratch_mul(2, (size_t)dw), sizeof(int));
     const size_t w_bytes =
         improc_scratch_mul((size_t)dw, sizeof(struct LinearWeights));
-    int                  *xs  = fast_malloc(xs_bytes);
-    struct LinearWeights *fxs = fast_malloc(w_bytes);
-    improc_scratch_check((void *const[]){xs, fxs}, 2);
+    const size_t h_bytes =
+        interpolation == INTER_NEAREST
+            ? 0
+            : improc_scratch_mul(
+                  improc_scratch_mul(improc_scratch_mul(2, (size_t)dw),
+                                     (size_t)cn),
+                  sizeof(int16_t));
+    int                  *xs   = fast_malloc(xs_bytes);
+    struct LinearWeights *fxs  = fast_malloc(w_bytes);
+    int16_t              *hbuf = NULL;
+    if (interpolation == INTER_NEAREST) {
+        improc_scratch_check((void *const[]){xs, fxs}, 2);
+    } else {
+        hbuf = fast_malloc(h_bytes);
+        improc_scratch_check((void *const[]){xs, fxs, hbuf}, 3);
+    }
     int *x0 = xs, *x1 = xs + dw;
 
     if (interpolation == INTER_NEAREST) {
@@ -415,20 +509,9 @@ void resize(struct Mat *dst, const struct Mat *src, int interpolation) {
             resize_nearest_row(mat_row(src, sy), mat_row(dst, y), dw, cn, x0);
         }
     } else {
-        for (int x = 0; x < dw; x++) {
-            linear_coord(x, sw, dw, area, 1, &x0[x], &fxs[x]);
-            x1[x] = x0[x] + 1 < sw ? x0[x] + 1 : sw - 1;
-        }
-        for (int y = 0; y < dh; y++) {
-            int                  y0;
-            struct LinearWeights fy;
-            linear_coord(y, sh, dh, area, 0, &y0, &fy);
-            int y1 = y0 + 1 < sh ? y0 + 1 : sh - 1;
-            y0     = y0 < 0 ? 0 : y0;
-            resize_linear_row(mat_row(src, y0), mat_row(src, y1),
-                              mat_row(dst, y), dw, cn, x0, x1, fxs, fy);
-        }
+        resize_linear(dst, src, area, x0, x1, fxs, hbuf);
     }
+    fast_free(hbuf);
     fast_free(xs);
     fast_free(fxs);
 }

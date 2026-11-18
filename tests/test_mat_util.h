@@ -20,6 +20,20 @@ static inline void fill_pattern(struct Mat *m, unsigned seed) {
     }
 }
 
+// Uniform pseudo-random bytes (xorshift32). Unlike fill_pattern, neighbouring
+// values are unrelated, which exercises every comparator of a sorting network
+// and every rounding remainder.
+static inline void fill_xorshift(struct Mat *m, uint32_t seed) {
+    uint32_t s = seed * 2654435761u + 1u;
+    size_t   n = (size_t)m->rows * m->step[0];
+    for (size_t i = 0; i < n; i++) {
+        s ^= s << 13;
+        s ^= s >> 17;
+        s ^= s << 5;
+        m->data[i] = (uchar)(s >> 24);
+    }
+}
+
 #define CHECK_MAT_BYTES(mat, expected)                                         \
     CHECK_EQ_BYTES((mat)->data, (expected), (size_t)(mat)->rows *(mat)->step[0])
 

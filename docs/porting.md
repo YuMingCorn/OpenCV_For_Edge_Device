@@ -20,6 +20,7 @@
 | `IMPROC_NO_MALLOC` | OFF | 沒有預設配置器；不編譯 `alloc_mat` 與 `free_mat`，改用 `mat_init` 包裝呼叫端的緩衝區 |
 | `IMPROC_ENABLE_FLOAT` | ON | 定義 `IMPROC_HAS_FLOAT=1` 並編譯浮點程式；沒有 FPU 的目標請關閉 |
 | `IMPROC_ASSERT_TERSE` | OFF | ASSERT 只傳行號給處理函式（運算式與檔名為 `NULL`），省下字串常數 |
+| `IMPROC_NO_SIMD` | OFF | 不使用 SSE2／NEON 路徑與 64 位元主機的 float HSV 路徑，只用可攜的整數迴圈；輸出逐位元組相同，用來測試這些路徑 |
 | `IMPROC_WERROR` | OFF | 警告視為錯誤 |
 | `IMPROC_KODAK_DIR` | `datasets/kodak` | Kodak 測試資料集位置 |
 
@@ -136,8 +137,9 @@ Cortex-M0+（`-fstack-usage`）最大的五個堆疊框：
 | `erode`、`dilate`、`morph_open`、`morph_close` | `n`（一列；`morph_open`／`morph_close` 另需呼叫端提供一張同尺寸的 `tmp`） |
 | `equalize_hist` | 1280（直方圖 1024 加查表 256） |
 | `otsu_threshold` | 1024 |
-| `resize`（`INTER_NEAREST`、`INTER_LINEAR`） | `dst_cols * (2 * sizeof(int) + 4)` |
-| `resize`（`INTER_AREA`） | `2 * dst_cols * cn * 4` |
+| `resize`（`INTER_NEAREST`） | `dst_cols * (2 * sizeof(int) + 4)` |
+| `resize`（`INTER_LINEAR`；`INTER_AREA` 放大時） | `dst_cols * (2 * sizeof(int) + 4) + 4 * dst_cols * cn` |
+| `resize`（`INTER_AREA` 縮小） | `2 * dst_cols * cn * 4`；剛好縮成一半時為 0 |
 | `fast_detect` | 有非極大值抑制：`3 * cols`（三列分數）；沒有：0。角點陣列由呼叫端提供 |
 | `orb_detect` | `n * (sizeof(struct KeyPoint) + 16)`（`n` 為 FAST 角點數，AVR 上每個 28 位元組），執行 FAST 時另加 `3 * cols`。關鍵點陣列由呼叫端提供 |
 | `orb_compute`、`hamming_distance` | 0（描述子陣列由呼叫端提供） |

@@ -1,4 +1,5 @@
 #include <setjmp.h>
+#include <stdlib.h>
 #include <stdint.h>
 
 #include "improc.h"
@@ -55,6 +56,35 @@ static void naive_morph(uchar *out, const uchar *in, int rows, int cols, int cn,
                     }
                 }
                 out[((size_t)y * cols + x) * cn + c] = (uchar)m;
+            }
+        }
+    }
+}
+
+// Random images, widths 0..65, 1/3/4 channels, ksize 3..7: the vector
+// passes and the scalar border columns against the naive window.
+static void test_morph_random_sweep(void) {
+    const int types[] = {CV_8UC1, CV_8UC3, CV_8UC4};
+    for (int t = 0; t < 3; t++) {
+        for (int w = 0; w <= 65; w++) {
+            for (int k = 3; k <= 7; k += 2) {
+                struct Mat *src = alloc_mat(8, w, types[t]);
+                struct Mat *dst = alloc_mat(8, w, types[t]);
+                int         cn  = (int)mat_channel_num(src);
+                uchar      *ref = malloc((size_t)8 * (size_t)w * (size_t)cn + 1);
+                fill_xorshift(src, (uint32_t)(t * 1000 + w * 10 + k));
+                for (int d = 0; d < 2; d++) {
+                    if (d) {
+                        dilate(dst, src, k);
+                    } else {
+                        erode(dst, src, k);
+                    }
+                    naive_morph(ref, src->data, 8, w, cn, k, d);
+                    CHECK_MAT_BYTES(dst, ref);
+                }
+                free(ref);
+                free_mat(&src);
+                free_mat(&dst);
             }
         }
     }
@@ -456,5 +486,6 @@ int main(void) {
     RUN_TEST(test_open_close_match_naive_composition);
     RUN_TEST(test_open_close_properties);
     RUN_TEST(test_open_close_zero_size_and_misuse);
+    RUN_TEST(test_morph_random_sweep);
     return test_finish();
 }

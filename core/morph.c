@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include "improc_internal.h"
+#include "improc_simd.h"
 #include "utils.h"
 
 static int is_u8_image_type(const struct Mat *m) {
@@ -11,23 +12,62 @@ static int is_u8_image_type(const struct Mat *m) {
 }
 
 // acc[i] = min/max(acc[i], row[i]) for n bytes.
-static void vmin_row(uchar *restrict acc, const uchar *restrict row, int n) {
-    for (int i = 0; i < n; i++) {
-        acc[i] = row[i] < acc[i] ? row[i] : acc[i];
+static void vminmax_row(uchar *restrict acc, const uchar *restrict row, int n,
+                        int is_max) {
+    int i = 0;
+#if IMPROC_SIMD
+    for (; i + 16 <= n; i += 16) {
+        v_u8 a = v_ld_u8(acc + i), b = v_ld_u8(row + i);
+        v_st_u8(acc + i, is_max ? v_max_u8(a, b) : v_min_u8(a, b));
+    }
+#endif
+    for (; i < n; i++) {
+        uchar a = acc[i], b = row[i];
+        acc[i]  = is_max ? (b > a ? b : a) : (b < a ? b : a);
     }
 }
 
-static void vmax_row(uchar *restrict acc, const uchar *restrict row, int n) {
-    for (int i = 0; i < n; i++) {
-        acc[i] = row[i] > acc[i] ? row[i] : acc[i];
+#if IMPROC_SIMD
+// Horizontal pass for the columns whose window lies inside the row, 16 bytes
+// at a time: out[j] = min/max of in[j + t * cn], t = -r..r. Returns the first
+// column left for the scalar code (r when the interior is narrower than one
+// vector, so the scalar code then does every column).
+static int hminmax_simd(const uchar *restrict in, uchar *restrict out,
+                        int cols, int cn, int r, int is_max) {
+    if (cols <= 2 * r) {
+        return r;
     }
+    const size_t ucn = (size_t)cn;
+    const size_t lo  = (size_t)r * ucn;
+    const size_t hi  = (size_t)(cols - r) * ucn;
+    if (hi - lo < 16) {
+        return r;
+    }
+    for (size_t j = lo;; j += 16) {
+        if (j + 16 > hi) {
+            j = hi - 16; // last block overlaps the previous one
+        }
+        const uchar *p = in + j - lo;
+        v_u8         m = v_ld_u8(p);
+        for (int t = 1; t <= 2 * r; t++) {
+            v_u8 v = v_ld_u8(p + (size_t)t * ucn);
+            m      = is_max ? v_max_u8(m, v) : v_min_u8(m, v);
+        }
+        v_st_u8(out + j, m);
+        if (j + 16 >= hi) {
+            break;
+        }
+    }
+    return cols - r;
 }
+#endif
 
 // Horizontal pass: out[x] = min/max of in[x - r .. x + r], clipped to
-// [0, cols - 1], per channel. in and out hold cols * cn bytes and are distinct.
-static void hmin_row(const uchar *restrict in, uchar *restrict out, int cols,
-                     int cn, int r) {
-    for (int x = 0; x < cols; x++) {
+// [0, cols - 1], per channel, for x0 <= x < x1. in and out hold cols * cn
+// bytes and are distinct.
+static void hmin_cols(const uchar *restrict in, uchar *restrict out, int cols,
+                      int cn, int r, int x0, int x1) {
+    for (int x = x0; x < x1; x++) {
         const int lo = x - r < 0 ? 0 : x - r;
         const int hi = (int32_t)x + r > cols - 1 ? cols - 1 : x + r;
         for (int c = 0; c < cn; c++) {
@@ -41,9 +81,9 @@ static void hmin_row(const uchar *restrict in, uchar *restrict out, int cols,
     }
 }
 
-static void hmax_row(const uchar *restrict in, uchar *restrict out, int cols,
-                     int cn, int r) {
-    for (int x = 0; x < cols; x++) {
+static void hmax_cols(const uchar *restrict in, uchar *restrict out, int cols,
+                      int cn, int r, int x0, int x1) {
+    for (int x = x0; x < x1; x++) {
         const int lo = x - r < 0 ? 0 : x - r;
         const int hi = (int32_t)x + r > cols - 1 ? cols - 1 : x + r;
         for (int c = 0; c < cn; c++) {
@@ -54,6 +94,22 @@ static void hmax_row(const uchar *restrict in, uchar *restrict out, int cols,
             }
             out[(size_t)x * (size_t)cn + (size_t)c] = m;
         }
+    }
+}
+
+static void hminmax_row(const uchar *restrict in, uchar *restrict out,
+                        int cols, int cn, int r, int is_max) {
+    void (*cols_fn)(const uchar *restrict, uchar *restrict, int, int, int, int,
+                    int) = is_max ? hmax_cols : hmin_cols;
+    int done = r; // columns [r, done) already written
+#if IMPROC_SIMD
+    done = hminmax_simd(in, out, cols, cn, r, is_max);
+#endif
+    if (done > r) {
+        cols_fn(in, out, cols, cn, r, 0, r);
+        cols_fn(in, out, cols, cn, r, done, cols);
+    } else {
+        cols_fn(in, out, cols, cn, r, 0, cols);
     }
 }
 
@@ -85,17 +141,9 @@ static void morph(struct Mat *dst, const struct Mat *src, int ksize,
             buf[i] = mat_row(src, y0)[i];
         }
         for (int yy = y0 + 1; yy <= y1; yy++) {
-            if (is_dilate) {
-                vmax_row(buf, mat_row(src, yy), n);
-            } else {
-                vmin_row(buf, mat_row(src, yy), n);
-            }
+            vminmax_row(buf, mat_row(src, yy), n, is_dilate);
         }
-        if (is_dilate) {
-            hmax_row(buf, mat_row(dst, y), src->cols, cn, r);
-        } else {
-            hmin_row(buf, mat_row(dst, y), src->cols, cn, r);
-        }
+        hminmax_row(buf, mat_row(dst, y), src->cols, cn, r, is_dilate);
     }
 
     fast_free(buf);

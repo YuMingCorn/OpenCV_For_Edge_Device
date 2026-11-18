@@ -301,27 +301,41 @@ static void test_rgb2hsv_grid_matches_reference(void) {
     }
 }
 
+// Every one of the 2^24 inputs, one 256 x 256 image (S rows, V columns) per H.
+// This runs the float32 path on 64-bit hosts and the integer emulation in the
+// IMPROC_NO_SIMD build and elsewhere; both must equal the reference.
 static void test_hsv2rgb_grid_matches_reference(void) {
-    // Every S and V; H every 7 below 180 and every H in 180..255, which
-    // scale past 6 and wrap by sector.
-    for (int h = 0; h < 256; h += h < 180 ? 7 : 1) {
+    struct Mat *src = alloc_mat(256, 256, CV_8UC3);
+    struct Mat *dst = alloc_mat(256, 256, CV_8UC3);
+    for (int h = 0; h < 256; h++) {
         for (int s = 0; s < 256; s++) {
+            uchar *row = mat_row(src, s);
             for (int v = 0; v < 256; v++) {
-                uchar in[3] = {(uchar)h, (uchar)s, (uchar)v};
-                uchar out[3];
-                int   want[3];
-                convert_px(COLOR_HSV2RGB, in, out);
+                row[3 * v]     = (uchar)h;
+                row[3 * v + 1] = (uchar)s;
+                row[3 * v + 2] = (uchar)v;
+            }
+        }
+        cvt_color(dst, src, COLOR_HSV2RGB);
+        for (int s = 0; s < 256; s++) {
+            const uchar *out = mat_row(dst, s);
+            for (int v = 0; v < 256; v++, out += 3) {
+                int want[3];
                 ref_hsv2rgb(h, s, v, want);
                 if (out[0] != want[0] || out[1] != want[1] ||
                     out[2] != want[2]) {
                     TEST_FAIL_("hsv2rgb(%d,%d,%d) = %d,%d,%d want %d,%d,%d", h,
                                s, v, out[0], out[1], out[2], want[0], want[1],
                                want[2]);
+                    free_mat(&src);
+                    free_mat(&dst);
                     return;
                 }
             }
         }
     }
+    free_mat(&src);
+    free_mat(&dst);
 }
 
 static void test_hsv_round_trip_error(void) {

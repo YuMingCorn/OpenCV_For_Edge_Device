@@ -266,6 +266,7 @@ Arduino 不能傳 `-D` 旗標，所以由 `src/improc_config.h` 提供預設值�
 | `IMPROC_ENABLE_FLOAT` | ON | 編譯 `convert_to` 等浮點程式 |
 | `IMPROC_ASSERT_TERSE` | OFF | ASSERT 只傳行號，省下字串常數 |
 | `IMPROC_WERROR` | OFF | 警告視為錯誤 |
+| `IMPROC_NO_SIMD` | OFF | 不用 SSE2／NEON 與主機 float 的快速路徑，只用可攜的整數迴圈；輸出逐位元組相同 |
 | `IMPROC_KODAK_DIR` | `datasets/kodak` | Kodak 資料集位置 |
 
 ## 快速開始
@@ -455,6 +456,7 @@ int32_t nm = match_descriptors(m, da, na, db, nb, 1);  // 交叉檢查
 ```sh
 ./build/demo [input-image] [output-prefix]     # 預設使用內建測試圖，prefix 為 out_
 ./build/bench_gray                             # 量測 RGB 轉灰階的耗時；效能數字請用 Release 建置
+./build/bench_ops datasets/kodak/kodim01.png   # 每個運算的 ns/px 與輸出雜湊，見 docs/performance.md
 ```
 
 ## 功能
@@ -518,6 +520,7 @@ python3 tools/compare_opencv.py --dump dump
 | [docs/README.md](docs/README.md) | 模組關係、`struct Mat` 資料模型與各演算法流程的圖解 |
 | [docs/porting.md](docs/porting.md) | 移植到邊緣裝置：編譯旗標、函式庫大小、各運算的暫存記憶體、沒有 malloc 時的用法 |
 | [docs/kodak-results.md](docs/kodak-results.md) | 每個運算與 OpenCV 的差異和容許誤差 |
+| [docs/performance.md](docs/performance.md) | 各運算的速度、SIMD 與迴圈最佳化，以及輸出不變的驗證方式 |
 
 ## 授權
 

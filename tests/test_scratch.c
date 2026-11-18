@@ -219,8 +219,12 @@ static void test_alloc_failure_geometry(void) {
     struct Mat *dst = alloc_mat(5, 7, CV_8UC3);
     fill_pattern(src, 4);
     CHECK_ALLOC_FAILURES(resize(dst, src, INTER_NEAREST), 2);
-    CHECK_ALLOC_FAILURES(resize(dst, src, INTER_LINEAR), 2);
+    CHECK_ALLOC_FAILURES(resize(dst, src, INTER_LINEAR), 3);
     CHECK_ALLOC_FAILURES(resize(dst, src, INTER_AREA), 1);
+    // INTER_AREA upscaling runs the linear kernel.
+    struct Mat *big = alloc_mat(13, 17, CV_8UC3);
+    CHECK_ALLOC_FAILURES(resize(big, src, INTER_AREA), 3);
+    free_mat(&big);
     free_mat(&src);
     free_mat(&dst);
 }
