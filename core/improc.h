@@ -10,6 +10,7 @@
 #include "morph.h"
 #include "hist.h"
 #include "features2d.h"
+#include "draw.h"
 #if IMPROC_HAS_FLOAT
 #include "convert_f32.h"
 #include "sift.h"
