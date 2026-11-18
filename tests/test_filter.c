@@ -639,6 +639,34 @@ static void median_vs_reference(int type, int rows, int cols, int ksize,
     free_mat(&ref);
 }
 
+// Random images, every width up to 65 and all channel counts: covers the
+// vector path (16 bytes at a time, overlapping last block) and the scalar
+// border columns on either side.
+static void test_filters_random_sweep(void) {
+    const int types[] = {CV_8UC1, CV_8UC3, CV_8UC4};
+    for (int t = 0; t < 3; t++) {
+        for (int w = 0; w <= 65; w++) {
+            for (int k = 3; k <= 7; k += 2) {
+                struct Mat *src = alloc_mat(9, w, types[t]);
+                struct Mat *dst = alloc_mat(9, w, types[t]);
+                struct Mat *ref = alloc_mat(9, w, types[t]);
+                fill_xorshift(src, (uint32_t)(t * 1000 + w * 10 + k));
+                if (k <= 5) {
+                    median_blur(dst, src, k);
+                    median_reference(ref, src, k);
+                    CHECK_MAT_BYTES(dst, ref->data);
+                }
+                gaussian_blur(dst, src, k);
+                gauss_reference(ref, src, k);
+                CHECK_MAT_BYTES(dst, ref->data);
+                free_mat(&src);
+                free_mat(&dst);
+                free_mat(&ref);
+            }
+        }
+    }
+}
+
 static void test_median_width_sweep(void) {
     const int ks[]    = {3, 5, 7, 15};
     const int types[] = {CV_8UC1, CV_8UC3, CV_8UC4};
@@ -733,6 +761,7 @@ int main(void) {
     RUN_TEST(test_median_larger_than_image);
     RUN_TEST(test_median_constant);
     RUN_TEST(test_median_width_sweep);
+    RUN_TEST(test_filters_random_sweep);
     RUN_TEST(test_median_height_sweep);
     RUN_TEST(test_median_every_ksize_sparse);
     RUN_TEST(test_median_extremes_k255);

@@ -1,6 +1,22 @@
 #include "color.h"
 
 #include <stdint.h>
+#include <string.h>
+
+// HSV2RGB can use the hardware's float32 directly on 64-bit hosts whose float
+// arithmetic is IEEE single precision evaluated in float. The result is the
+// same as the integer emulation below, which every other target uses (and
+// IMPROC_NO_SIMD forces, so the tests also run it on a host).
+#if IMPROC_HAS_FLOAT && !defined(IMPROC_NO_SIMD) &&                            \
+    (defined(__x86_64__) || defined(_M_X64) || defined(__aarch64__))
+#include <float.h>
+#if FLT_EVAL_METHOD == 0
+#define IMPROC_HSV_FLOAT 1
+#endif
+#endif
+#ifndef IMPROC_HSV_FLOAT
+#define IMPROC_HSV_FLOAT 0
+#endif
 
 // OpenCV's Q15 gray weights (RGB2GRAY and BGR5652GRAY). The sum reaches
 // 32768 * 255 + 16384, so it needs uint32_t where int is 16 bits.
@@ -224,6 +240,72 @@ static inline void rgb2hsv_px(int32_t r, int32_t g, int32_t b, uchar *d) {
     d[2] = (uchar)v;
 }
 
+#if IMPROC_HSV_FLOAT
+// 1 - a * b rounded once to float32, for 0 <= a * b <= 1, without an FMA
+// instruction: a * b is exact in double (24 + 24 bits), and TwoSum gives the
+// rounding error of 1 - a * b, so 1 - a * b == d + err exactly. Rounding d to
+// float32 is then wrong only when d is a float32 midpoint and err points past
+// it; that case moves one float32 step. Every value here is positive, so a
+// step is +-1 on the bit pattern.
+static inline float hsv_one_minus_mul(float a, float b) {
+    double p   = (double)a * (double)b;
+    double d   = 1.0 - p;
+    double err = (1.0 - d) - p;
+    float  f   = (float)d;
+    double gap = d - (double)f; // exact
+    if (err != 0.0 && gap != 0.0) {
+        uint32_t bits;
+        memcpy(&bits, &f, sizeof bits);
+        bits += gap > 0.0 ? 1u : (uint32_t)-1;
+        float next;
+        memcpy(&next, &bits, sizeof next);
+        if (gap == ((double)next - (double)f) / 2.0 &&
+            (err > 0.0) == (gap > 0.0)) {
+            f = next;
+        }
+    }
+    return f;
+}
+
+static inline void hsv2rgb_px(uint32_t h, uint32_t s, uint32_t v, int swap,
+                              uchar *d) {
+    const float inv = 1.0f / 255.0f;
+    float       hh  = (float)h * (6.0f / 180.0f);
+    uint32_t    k   = (uint32_t)hh; // trunc, hh >= 0
+    float       f   = hh - (float)k;
+    float       sf  = (float)s * inv;
+    float       vf  = (float)v * inv;
+    uint32_t    sec = k % 6u;
+    uint32_t    p   = (uint32_t)(vf * (1.0f - sf) * 255.0f);
+    uint32_t    q   = (uint32_t)(vf * hsv_one_minus_mul(sf, f) * 255.0f);
+    uint32_t    t = (uint32_t)(vf * hsv_one_minus_mul(sf, 1.0f - f) * 255.0f);
+    v             = (uint32_t)(vf * 255.0f);
+    uint32_t r, g, b;
+    switch (sec) {
+    case 0:
+        r = v, g = t, b = p;
+        break;
+    case 1:
+        r = q, g = v, b = p;
+        break;
+    case 2:
+        r = p, g = v, b = t;
+        break;
+    case 3:
+        r = p, g = q, b = v;
+        break;
+    case 4:
+        r = t, g = p, b = v;
+        break;
+    default:
+        r = v, g = p, b = q;
+        break;
+    }
+    d[swap ? 2 : 0] = (uchar)r;
+    d[1]            = (uchar)g;
+    d[swap ? 0 : 2] = (uchar)b;
+}
+#else
 // HSV to RGB reproduces OpenCV's 8-bit vector code bit for bit, without float
 // hardware. That code works in float32: S = s * (1/255), V = v * (1/255),
 // H = h * (6/180), F = H - trunc(H), then V (1 - S), V (1 - S F) and
@@ -238,11 +320,21 @@ struct F32 {
     int      e;
 };
 
-static struct F32 f32_round(uint64_t m, int e) {
+// Number of bits in m beyond the 24 a float32 keeps (0 when m < 2^24).
+static inline int f32_excess_bits(uint64_t m) {
+#if defined(__GNUC__) || defined(__clang__)
+    return m >> 24 ? 40 - __builtin_clzll(m) : 0;
+#else
     int n = 0;
     while ((m >> n) >= ((uint64_t)1 << 24)) {
         n++;
     }
+    return n;
+#endif
+}
+
+static struct F32 f32_round(uint64_t m, int e) {
+    int n = f32_excess_bits(m);
     if (n > 0) {
         uint64_t q    = m >> n;
         uint64_t r    = m & (((uint64_t)1 << n) - 1u);
@@ -322,6 +414,8 @@ static inline void hsv2rgb_px(uint32_t h, uint32_t s, uint32_t v, int swap,
     d[1]            = (uchar)g;
     d[swap ? 0 : 2] = (uchar)b;
 }
+
+#endif // IMPROC_HSV_FLOAT
 
 static void rgb2hsv_row(const uchar *restrict s, uchar *restrict d, int width) {
     for (int x = 0; x < width; x++, s += 3, d += 3) {
