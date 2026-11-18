@@ -431,6 +431,25 @@ if (s.count > 200) {                            // 變動的像素夠多才算�
 }
 ```
 
+### 特徵點配對
+
+`a`、`b` 是同一場景的兩張灰階畫面（`CV_8UC1`），`sa`、`sb` 是同尺寸的暫存影像。ORB 在兩張圖各找最多 500 個關鍵點，再用描述子配對：
+
+```c
+static struct KeyPoint ka[500], kb[500];
+static uint8_t         da[500][ORB_DESC_BYTES], db[500][ORB_DESC_BYTES];
+static struct DMatch   m[500];
+
+int32_t na = orb_detect(ka, 500, a, 20);   // FAST 門檻 20
+int32_t nb = orb_detect(kb, 500, b, 20);
+gaussian_blur(sa, a, 7);                   // 描述子在平滑後的影像上取樣
+gaussian_blur(sb, b, 7);
+orb_compute(da, ka, na, sa);
+orb_compute(db, kb, nb, sb);
+int32_t nm = match_descriptors(m, da, na, db, nb, 1);  // 交叉檢查
+// m[i].query、m[i].train 是 ka、kb 的索引；m[i].distance 越小越像
+```
+
 完整的可執行範例是 `main.c`（建置後的 `demo`）。它對一張圖依序跑過所有運算，並各存一張 PNG：
 
 ```sh
