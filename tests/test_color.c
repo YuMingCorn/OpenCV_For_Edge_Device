@@ -1,3 +1,5 @@
+#include <float.h>
+#include <math.h>
 #include <setjmp.h>
 #include <stdint.h>
 
@@ -16,7 +18,7 @@ static void convert_bytes(int code, int stype, int dtype, int rows, int cols,
 
 static void test_rgb2gray_primaries(void) {
     const uchar in[]  = {255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255};
-    const uchar out[] = {77, 149, 29, 255};
+    const uchar out[] = {76, 150, 29, 255};
     convert_bytes(COLOR_RGB2GRAY, CV_8UC3, CV_8UC1, 2, 2, in, out);
 }
 
@@ -28,10 +30,12 @@ static void test_rgb_bgr_gray_values(void) {
     convert_bytes(COLOR_BGR2GRAY, CV_8UC3, CV_8UC1, 1, 3, in, bgr_out);
 }
 
+// Q15 weights 9798, 19235, 3735. (0, 12, 4) sums to 8 * 32768 + 16384, an
+// exact half, which rounds up; the others sit just off a boundary.
 static void test_gray_rounding_probes(void) {
-    const uchar in[]  = {1, 1, 1, 0, 0, 1, 2, 0, 0, 255, 0, 255};
-    const uchar out[] = {1, 0, 1, 106};
-    convert_bytes(COLOR_RGB2GRAY, CV_8UC3, CV_8UC1, 1, 4, in, out);
+    const uchar in[]  = {0, 12, 4, 1, 1, 1, 0, 0, 1, 2, 0, 0, 255, 0, 255};
+    const uchar out[] = {8, 1, 0, 1, 105};
+    convert_bytes(COLOR_RGB2GRAY, CV_8UC3, CV_8UC1, 1, 5, in, out);
 }
 
 static void test_rgb2gray_synthetic(void) {
@@ -120,8 +124,9 @@ static void test_width_sweep(void) {
         for (int y = 0; y < 3; y++) {
             for (int x = 0; x < w; x++) {
                 const uchar *p = mat_at(src, y, x);
-                unsigned     v =
-                    (77u * p[0] + 150u * p[1] + 29u * p[2] + 128u) >> 8;
+                uint32_t     v =
+                    (9798u * p[0] + 19235u * p[1] + 3735u * p[2] + 16384u) /
+                    32768u;
                 CHECK_EQ_INT(*(uchar *)mat_at(gray, y, x), v);
                 const uchar *q = mat_at(bgr, y, x);
                 CHECK_EQ_INT(q[0], p[2]);
@@ -165,18 +170,26 @@ static void test_bgr2hsv_swaps_input(void) {
     convert_bytes(COLOR_BGR2HSV, CV_8UC3, CV_8UC3, 1, 2, in, out);
 }
 
+// Values from cv2.cvtColor(..., COLOR_HSV2RGB), OpenCV 4.10.0, each pixel in a
+// row of 32 so that OpenCV runs its vector loop (see core/color.c). (0, 49,
+// 255) and (0, 1, 1) have exact quotients 206 and 1 that OpenCV's float
+// arithmetic lands just below, so truncation gives 205 and 0. H 200 and 255
+// show that H is not reduced modulo 180 before scaling.
 static void test_hsv2rgb_hand_values(void) {
-    const uchar in[]  = {0,   255, 255, 60,  255, 255, 120, 255,
-                         255, 15,  128, 200, 90,  100, 50,  45,
-                         200, 100, 179, 255, 255, 200, 255, 255};
-    const uchar out[] = {255, 0,  0,  0,  255, 0,  0,   0, 255, 200, 150, 100,
-                         30,  50, 50, 61, 100, 22, 255, 0, 9,   255, 170, 0};
-    convert_bytes(COLOR_HSV2RGB, CV_8UC3, CV_8UC3, 1, 8, in, out);
+    const uchar in[]  = {0,   255, 255, 60,  255, 255, 120, 255, 255, 15,
+                         128, 200, 90,  100, 50,  45,  200, 100, 179, 255,
+                         255, 200, 255, 255, 0,   49,  255, 0,   1,   1,
+                         1,   90,  85,  30,  128, 200, 255, 10,  250};
+    const uchar out[] = {255, 0,   0,   0,   255, 0,   0,   0,   255, 200,
+                         149, 99,  30,  49,  50,  60,  100, 21,  255, 0,
+                         8,   255, 170, 0,   255, 205, 205, 1,   0,   0,
+                         85,  56,  55,  200, 200, 99,  240, 250, 245};
+    convert_bytes(COLOR_HSV2RGB, CV_8UC3, CV_8UC3, 1, 13, in, out);
 }
 
 static void test_hsv2bgr_swaps_output(void) {
     const uchar in[]  = {15, 128, 200};
-    const uchar out[] = {100, 150, 200};
+    const uchar out[] = {99, 149, 200};
     convert_bytes(COLOR_HSV2BGR, CV_8UC3, CV_8UC3, 1, 1, in, out);
 }
 
@@ -208,14 +221,49 @@ static void ref_rgb2hsv(int r, int g, int b, int out[3]) {
     out[2] = v;
 }
 
+// Float reference for OpenCV's vector HSV2RGB, written with the hardware's
+// IEEE single precision rather than the integer emulation in core/color.c.
+// Plain products and differences are float operations (FLT_EVAL_METHOD 0 on
+// every supported target). The fused 1 - a*b is computed in double: a*b is
+// exact there (24 + 24 bits), TwoSum recovers the error of 1 - a*b, and the
+// sum is then rounded to float once. No expression below has the a * b + c
+// shape that a compiler may contract into a fused multiply-add.
+#if FLT_EVAL_METHOD != 0
+#error "ref_hsv2rgb needs float arithmetic evaluated in float"
+#endif
+static float ref_one_minus_mul(float a, float b) {
+    double p   = (double)a * (double)b;
+    double d   = 1.0 - p;
+    double err = (1.0 - d) - p; // 1 - p == d + err exactly
+    float  f   = (float)d;
+    double gap = d - (double)f; // exact
+    if (err != 0.0 && gap != 0.0) {
+        float  next = nextafterf(f, gap > 0.0 ? 2.0f : 0.0f);
+        double half = ((double)next - (double)f) / 2.0;
+        // d on the midpoint: the true value lies past it when err points the
+        // same way as gap.
+        if (gap == half && (err > 0.0) == (gap > 0.0)) {
+            f = next;
+        }
+    }
+    return f;
+}
+
 static void ref_hsv2rgb(int h, int s, int v, int out[3]) {
-    h %= 180;
-    int64_t sec = h / 30, f = h - 30 * sec;
-    int64_t val[4];
-    val[0] = v;
-    val[1] = ((int64_t)v * (7650 - s * (30 - f)) + 3825) / 7650; // t
-    val[2] = ((int64_t)v * (255 - s) + 127) / 255;               // p
-    val[3] = ((int64_t)v * (7650 - s * f) + 3825) / 7650;        // q
+    const float inv255 = 1.0f / 255.0f;
+    float       hh     = (float)h * (6.0f / 180.0f);
+    float       sec_f  = truncf(hh);
+    float       f      = hh - sec_f;
+    float       sf     = (float)s * inv255;
+    float       vf     = (float)v * inv255;
+    float       tab[4] = {vf, vf * (1.0f - sf), vf * ref_one_minus_mul(sf, f),
+                          vf * ref_one_minus_mul(sf, 1.0f - f)};
+    int64_t     sec    = (int64_t)sec_f % 6;
+    int64_t     val[4];
+    val[0] = (int64_t)(tab[0] * 255.0f);
+    val[1] = (int64_t)(tab[3] * 255.0f); // t
+    val[2] = (int64_t)(tab[1] * 255.0f); // p
+    val[3] = (int64_t)(tab[2] * 255.0f); // q
     // Per sector: indexes into val for (R, G, B).
     static const int tbl[6][3] = {{0, 1, 2}, {3, 0, 2}, {2, 0, 1},
                                   {2, 3, 0}, {1, 2, 0}, {0, 2, 3}};
@@ -254,10 +302,11 @@ static void test_rgb2hsv_grid_matches_reference(void) {
 }
 
 static void test_hsv2rgb_grid_matches_reference(void) {
-    // Includes H 180..255, which the kernel wraps modulo 180.
-    for (int h = 0; h < 256; h++) {
-        for (int s = 0; s < 256; s += 5) {
-            for (int v = 0; v < 256; v += 5) {
+    // Every S and V; H every 7 below 180 and every H in 180..255, which
+    // scale past 6 and wrap by sector.
+    for (int h = 0; h < 256; h += h < 180 ? 7 : 1) {
+        for (int s = 0; s < 256; s++) {
+            for (int v = 0; v < 256; v++) {
                 uchar in[3] = {(uchar)h, (uchar)s, (uchar)v};
                 uchar out[3];
                 int   want[3];
@@ -295,7 +344,9 @@ static void test_hsv_round_trip_error(void) {
         }
     }
     printf("  hsv round trip max error %d\n", worst);
-    CHECK(worst <= 5);
+    // OpenCV's HSV2RGB truncates instead of rounding, so the round trip loses
+    // up to one more level than a rounding conversion would (5).
+    CHECK(worst <= 6);
 }
 
 static void test_hsv_width_sweep(void) {
@@ -401,7 +452,7 @@ static void test_rgb2yuv_hand_values(void) {
     const uchar in[]  = {255, 0,   0,   0,  255, 0,  0,   0,   255,
                          128, 128, 128, 0,  0,   0,  255, 255, 255,
                          200, 100, 50,  10, 20,  30, 255, 255, 0};
-    const uchar out[] = {77,  85,  255, 149, 43,  21,  29,  255, 107,
+    const uchar out[] = {76,  85,  255, 150, 43,  21,  29,  255, 107,
                          128, 128, 128, 0,   128, 128, 255, 128, 128,
                          124, 86,  182, 18,  135, 122, 226, 1,   149};
     convert_bytes(COLOR_RGB2YUV, CV_8UC3, CV_8UC3, 1, 9, in, out);
@@ -409,7 +460,7 @@ static void test_rgb2yuv_hand_values(void) {
 
 static void test_bgr2yuv_swaps_input(void) {
     const uchar in[]  = {0, 0, 255, 50, 100, 200};
-    const uchar out[] = {77, 85, 255, 124, 86, 182};
+    const uchar out[] = {76, 85, 255, 124, 86, 182};
     convert_bytes(COLOR_BGR2YUV, CV_8UC3, CV_8UC3, 1, 2, in, out);
 }
 
@@ -427,28 +478,27 @@ static void test_yuv2bgr_swaps_output(void) {
     convert_bytes(COLOR_YUV2BGR, CV_8UC3, CV_8UC3, 1, 1, in, out);
 }
 
-// 64-bit reference with plain arithmetic division by 256 after clamping.
-static void ref_rgb2yuv(int r, int g, int b, int out[3]) {
-    int64_t y = (77 * r + 150 * g + 29 * b + 128) / 256;
-    int64_t u = (32896 - 43 * r - 85 * g + 128 * b) / 256;
-    int64_t v = (32896 + 128 * r - 107 * g - 21 * b) / 256;
-    out[0]    = (int)y;
-    out[1]    = (int)(u > 255 ? 255 : u);
-    out[2]    = (int)(v > 255 ? 255 : v);
+// 64-bit reference for OpenCV's Q14 YCrCb constants, with an explicit floor
+// division in place of the arithmetic shift.
+static int64_t ref_descale14(int64_t x) {
+    int64_t n = x + 8192;
+    int64_t q = n / 16384;
+    return (n % 16384 != 0 && n < 0) ? q - 1 : q;
 }
 
-static int ref_yuv_clamp(int64_t x) {
-    if (x < 0) {
-        return 0;
-    }
-    x /= 256;
-    return (int)(x > 255 ? 255 : x);
+static int ref_sat(int64_t x) { return (int)(x < 0 ? 0 : x > 255 ? 255 : x); }
+
+static void ref_rgb2yuv(int r, int g, int b, int out[3]) {
+    int64_t y = ref_descale14(4899 * r + 9617 * g + 1868 * b);
+    out[0]    = (int)y;
+    out[1]    = ref_sat(128 + ref_descale14((b - y) * 9241));
+    out[2]    = ref_sat(128 + ref_descale14((r - y) * 11682));
 }
 
 static void ref_yuv2rgb(int y, int u, int v, int out[3]) {
-    out[0] = ref_yuv_clamp(256 * y + 359 * (v - 128) + 128);
-    out[1] = ref_yuv_clamp(256 * y - 88 * (u - 128) - 183 * (v - 128) + 128);
-    out[2] = ref_yuv_clamp(256 * y + 454 * (u - 128) + 128);
+    out[0] = ref_sat(y + ref_descale14(22987 * (v - 128)));
+    out[1] = ref_sat(y + ref_descale14(-11698 * (v - 128) - 5636 * (u - 128)));
+    out[2] = ref_sat(y + ref_descale14(29049 * (u - 128)));
 }
 
 static void test_rgb2yuv_grid_matches_reference(void) {
@@ -470,11 +520,14 @@ static void test_rgb2yuv_grid_matches_reference(void) {
             }
         }
     }
-    // The corners hit the clamp value 256 for U (blue) and V (red).
+    // Blue and red push U and V past 255 before the clamp.
     const uchar blue[3] = {0, 0, 255};
+    const uchar red[3]  = {255, 0, 0};
     uchar       out[3];
     convert_px(COLOR_RGB2YUV, blue, out);
     CHECK_EQ_INT(out[1], 255);
+    convert_px(COLOR_RGB2YUV, red, out);
+    CHECK_EQ_INT(out[2], 255);
 }
 
 static void test_yuv2rgb_grid_matches_reference(void) {
@@ -577,7 +630,7 @@ static void ref_565(unsigned t, int bgr[3]) {
 }
 
 static int ref_luma(int r, int g, int b) {
-    return (77 * r + 150 * g + 29 * b + 128) >> 8;
+    return (int)((9798L * r + 19235L * g + 3735L * b + 16384L) / 32768L);
 }
 
 static int ref_sat_shift20(long long x) {
@@ -604,7 +657,7 @@ static void test_bgr565_hand_values(void) {
     const uchar be[]   = {0xF8, 0x00, 0x07, 0xE0, 0x00, 0x1F, 0xFF, 0xFF};
     const uchar bgr[]  = {0, 0, 248, 0, 252, 0, 248, 0, 0, 248, 252, 248};
     const uchar rgb[]  = {248, 0, 0, 0, 252, 0, 0, 0, 248, 248, 252, 248};
-    const uchar gray[] = {75, 148, 28, 250};
+    const uchar gray[] = {74, 148, 28, 250};
     convert_bytes(COLOR_BGR5652BGR, CV_8UC2, CV_8UC3, 1, 4, le, bgr);
     convert_bytes(COLOR_BGR5652RGB, CV_8UC2, CV_8UC3, 1, 4, le, rgb);
     convert_bytes(COLOR_BGR5652GRAY, CV_8UC2, CV_8UC1, 1, 4, le, gray);

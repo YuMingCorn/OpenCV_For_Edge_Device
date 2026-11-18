@@ -61,7 +61,7 @@ def _otsu_binary(ctx):
 
 
 OPS = {
-    "equalize": (lambda c: cv2.equalizeHist(c.get("gray")), 1, "equalizeHist on our gray"),
+    "equalize": (lambda c: cv2.equalizeHist(c.get("gray")), 0, "equalizeHist on our gray"),
     "otsu_binary": (_otsu_binary, 0, "THRESH_OTSU on our gray; also checks hist and otsu values"),
 }
 

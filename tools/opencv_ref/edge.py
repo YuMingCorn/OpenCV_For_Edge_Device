@@ -109,7 +109,7 @@ def _corner_box(c):
 
 
 OPS = {
-    "edge_gray": (lambda c: cv2.cvtColor(c.get("src"), cv2.COLOR_RGB2GRAY), 1,
+    "edge_gray": (lambda c: cv2.cvtColor(c.get("src"), cv2.COLOR_RGB2GRAY), 0,
                   "COLOR_RGB2GRAY"),
     "crop_center": (_crop_center, 0, "numpy slice of the middle half"),
     "absdiff_shift": (_absdiff_shift, 0, "cv2.absdiff of two frames 6 px apart"),

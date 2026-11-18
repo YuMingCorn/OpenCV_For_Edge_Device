@@ -30,7 +30,7 @@ enum ColorConversionCodes {
     COLOR_BGR2HSV,
     COLOR_HSV2RGB,
     COLOR_HSV2BGR,
-    // CV_8UC3 to CV_8UC3. JFIF full-range BT.601: Y, U (Cb), V (Cr).
+    // CV_8UC3 to CV_8UC3. OpenCV's YCrCb in the order Y, U (Cb), V (Cr).
     COLOR_RGB2YUV,
     COLOR_BGR2YUV,
     COLOR_YUV2RGB,
@@ -56,11 +56,13 @@ enum ColorConversionCodes {
 };
 
 // 8-bit color conversion. The caller allocates dst with the matching type and
-// the same rows and cols as src. Gray uses Y = (77R + 150G + 29B + 128) >> 8.
-// RGB2HSV matches OpenCV exactly; HSV2RGB and YUV are within 1 level of
-// OpenCV (YUV is YCrCb with the two chroma channels swapped). 565 to BGR/RGB
-// and all YUYV codes match OpenCV exactly; 565 to GRAY applies the gray
-// formula above to the expanded channels (within 1 level of OpenCV).
+// the same rows and cols as src. Every code matches OpenCV 4.10 byte for byte,
+// except HSV2RGB in OpenCV's scalar row tail, described below.
+// Gray uses OpenCV's Q15 weights, Y = (9798R + 19235G + 3735B + 16384) >> 15,
+// also for 565 to GRAY. YUV is YCrCb with the two chroma channels swapped.
+// HSV2RGB follows OpenCV's vector loop (float32, truncating); OpenCV's scalar
+// loop, used for the last width % 32 pixels of a row on AVX2 builds, rounds
+// instead and differs by one level on about a third of those pixels.
 void cvt_color(struct Mat *dst, const struct Mat *src, int code);
 
 #endif // COLOR_H_

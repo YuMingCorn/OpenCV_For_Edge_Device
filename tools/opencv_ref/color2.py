@@ -12,11 +12,11 @@ _SWAP = [0, 2, 1]
 OPS = {
     "rgb2hsv": (lambda c: cv2.cvtColor(c.get("src"), cv2.COLOR_RGB2HSV), 0,
                 "COLOR_RGB2HSV, exact"),
-    "hsv2rgb_roundtrip": (lambda c: cv2.cvtColor(c.get("rgb2hsv"), cv2.COLOR_HSV2RGB), 1,
+    "hsv2rgb_roundtrip": (lambda c: cv2.cvtColor(c.get("rgb2hsv"), cv2.COLOR_HSV2RGB), 0,
                           "COLOR_HSV2RGB on our HSV"),
-    "rgb2yuv": (lambda c: cv2.cvtColor(c.get("src"), cv2.COLOR_RGB2YCrCb)[..., _SWAP], 1,
+    "rgb2yuv": (lambda c: cv2.cvtColor(c.get("src"), cv2.COLOR_RGB2YCrCb)[..., _SWAP], 0,
                 "COLOR_RGB2YCrCb, chroma swapped"),
     "yuv2rgb_roundtrip": (
-        lambda c: cv2.cvtColor(c.get("rgb2yuv")[..., _SWAP].copy(), cv2.COLOR_YCrCb2RGB), 1,
+        lambda c: cv2.cvtColor(c.get("rgb2yuv")[..., _SWAP].copy(), cv2.COLOR_YCrCb2RGB), 0,
         "COLOR_YCrCb2RGB on our YUV, chroma swapped"),
 }

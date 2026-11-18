@@ -131,6 +131,15 @@ void absdiff(struct Mat *dst, const struct Mat *a, const struct Mat *b) {
     }
 }
 
+// a / 256 rounded half to even and saturated to 0..255, for a >= 0. OpenCV
+// rounds the float result with cvRound, which is half to even.
+static inline uchar sat_q8_half_even(int32_t a) {
+    int32_t q = a >> 8;
+    int32_t r = a & 255;
+    q += r > 128 || (r == 128 && (q & 1));
+    return (uchar)(q > 255 ? 255 : q);
+}
+
 void convert_scale(struct Mat *dst, const struct Mat *src, int32_t alpha_q8,
                    int32_t beta) {
     ASSERT(dst != src && dst->data != src->data);
@@ -145,8 +154,8 @@ void convert_scale(struct Mat *dst, const struct Mat *src, int32_t alpha_q8,
     }
     uchar lut[256];
     for (int i = 0; i < 256; i++) {
-        int32_t v = (int32_t)i * alpha_q8 + beta * 256 + 128;
-        lut[i]    = (uchar)(v < 0 ? 0 : ((v >> 8) > 255 ? 255 : (v >> 8)));
+        int32_t v = (int32_t)i * alpha_q8 + beta * 256;
+        lut[i]    = v < 0 ? 0 : sat_q8_half_even(v);
     }
     int n = src->cols * (int)mat_channel_num(src);
     for (int y = 0; y < src->rows; y++) {
@@ -158,9 +167,7 @@ static void scale_abs_row(const int16_t *restrict s, uchar *restrict d, int n,
                           int32_t alpha_q8, int32_t beta) {
     for (int i = 0; i < n; i++) {
         int32_t v = (int32_t)s[i] * alpha_q8 + beta * 256;
-        int32_t a = v < 0 ? -v : v;
-        int32_t r = (a + 128) >> 8; // a >= 0
-        d[i]      = (uchar)(r > 255 ? 255 : r);
+        d[i]      = sat_q8_half_even(v < 0 ? -v : v);
     }
 }
 

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 1400" width="1280" height="1400" role="img" aria-labelledby="t d">
-<title id="t">resize 座標對應：半像素中心、查表、Q8 權重與 INTER_AREA 整數權重</title>
-<desc id="d">以 sw = 4、dw = 8 為例，說明 resize 的半像素中心對應、查表內容，以及 INTER_NEAREST 與 INTER_LINEAR 的處理流程；另以 sw = 4、dw = 3 說明 INTER_AREA 的整數重疊權重與整數四捨五入。</desc>
+<title id="t">resize 座標對應：半像素中心、查表、Q11 權重與 INTER_AREA 整數權重</title>
+<desc id="d">以 sw = 4、dw = 8 為例，說明 resize 的半像素中心對應、查表內容，以及 INTER_NEAREST 與 INTER_LINEAR 的處理流程；另以 sw = 4、dw = 3 說明 INTER_AREA 的整數重疊權重與四捨六入五成雙。</desc>
 <defs>
 <style>
 .t{font-family:"Segoe UI","Microsoft JhengHei","PingFang TC","Noto Sans TC","Helvetica Neue",Arial,sans-serif;fill:#1F2328}
@@ -26,7 +26,7 @@
 <marker id="arr-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#CF222E"/></marker>
 </defs>
 <rect x="0" y="0" width="1280" height="1400" rx="8" fill="#FFFFFF" stroke="#D0D7DE"/>
-<text class="t b" x="32" y="44" font-size="22">resize 座標對應：半像素中心、查表、Q8 權重與 INTER_AREA 整數權重</text>
+<text class="t b" x="32" y="44" font-size="22">resize 座標對應：半像素中心、查表、Q11 權重與 INTER_AREA 整數權重</text>
 <text class="t g" x="32" y="66" font-size="13">core/geometry.c：linear_coord、resize_nearest_row、resize_linear_row、resize_area、area_row_h</text>
 <rect class="panel" x="32" y="90" width="1216" height="310" rx="8"/>
 <text class="t b" x="44" y="112" font-size="15">半像素中心對應（例：sw = 4 → dw = 8）</text>
@@ -112,14 +112,14 @@
 <text class="m" x="713" y="536" font-size="12" text-anchor="middle">2</text>
 <text class="m" x="783" y="536" font-size="12" text-anchor="middle">3</text>
 <line class="grid" x1="48" y1="546" x2="818" y2="546"/>
-<text class="m" x="56" y="566" font-size="12">fx（Q8）</text>
+<text class="m" x="56" y="566" font-size="12">a1（Q11）</text>
 <text class="m" x="293" y="566" font-size="12" text-anchor="middle">0</text>
-<text class="m" x="363" y="566" font-size="12" text-anchor="middle">64</text>
-<text class="m" x="433" y="566" font-size="12" text-anchor="middle">192</text>
-<text class="m" x="503" y="566" font-size="12" text-anchor="middle">64</text>
-<text class="m" x="573" y="566" font-size="12" text-anchor="middle">192</text>
-<text class="m" x="643" y="566" font-size="12" text-anchor="middle">64</text>
-<text class="m" x="713" y="566" font-size="12" text-anchor="middle">192</text>
+<text class="m" x="363" y="566" font-size="12" text-anchor="middle">512</text>
+<text class="m" x="433" y="566" font-size="12" text-anchor="middle">1536</text>
+<text class="m" x="503" y="566" font-size="12" text-anchor="middle">512</text>
+<text class="m" x="573" y="566" font-size="12" text-anchor="middle">1536</text>
+<text class="m" x="643" y="566" font-size="12" text-anchor="middle">512</text>
+<text class="m" x="713" y="566" font-size="12" text-anchor="middle">1536</text>
 <text class="m" x="783" y="566" font-size="12" text-anchor="middle">0</text>
 <line class="grid" x1="48" y1="576" x2="818" y2="576"/>
 <text class="m" x="56" y="596" font-size="12">x1 = min(x0 + 1, sw − 1)</text>
@@ -153,16 +153,16 @@
 <line class="grid" x1="748" y1="456" x2="748" y2="636"/>
 <text class="t b" x="840" y="470" font-size="12">公式（linear_coord、resize）</text>
 <text class="m" x="840" y="490" font-size="12" xml:space="preserve">d = 2 × dw = 16</text>
-<text class="m" x="840" y="506" font-size="12" xml:space="preserve">n &lt; 0 → x0 = 0, fx = 0</text>
-<text class="m" x="840" y="522" font-size="12" xml:space="preserve">否則 x0 = n / d</text>
-<text class="m" x="840" y="538" font-size="12" xml:space="preserve">  fx = ((n − x0×d) × 256 + dw) / d</text>
-<text class="m" x="840" y="554" font-size="12" xml:space="preserve">x0 &gt;= sw − 1 → x0 = sw − 1, fx = 0</text>
-<text class="t" x="840" y="570" font-size="12" xml:space="preserve">fx 範圍 0..256（四捨五入可能到 256，</text>
-<text class="t" x="840" y="586" font-size="12" xml:space="preserve">所以用 uint16_t）</text>
+<text class="m" x="840" y="506" font-size="12" xml:space="preserve">fx = float32(n / d)，五成雙</text>
+<text class="m" x="840" y="522" font-size="12" xml:space="preserve">x0 = floor(fx)，f = fx − x0</text>
+<text class="m" x="840" y="538" font-size="12" xml:space="preserve">  a1 = rint(f×2048), a0 = rint((1−f)×2048)</text>
+<text class="m" x="840" y="554" font-size="12" xml:space="preserve">x0 &lt; 0 或 ≥ sw − 1 → 夾住，a1 = 0</text>
+<text class="t" x="840" y="570" font-size="12" xml:space="preserve">y 方向不夾座標，只夾列索引；</text>
+<text class="t" x="840" y="586" font-size="12" xml:space="preserve">a0、a1 各自捨入，和可能差 1</text>
 <text class="t" x="840" y="602" font-size="12" xml:space="preserve">INTER_NEAREST：沒有權重</text>
 <text class="m" x="840" y="618" font-size="12" xml:space="preserve">  x0 = ((2×x + 1) × sw) / (2 × dw)</text>
-<text class="t g" x="1140" y="538" font-size="11">geometry.c:82-88</text>
-<text class="t g" x="1130" y="618" font-size="11">geometry.c:207-210</text>
+<text class="t g" x="1140" y="538" font-size="11">geometry.c</text>
+<text class="t g" x="1130" y="618" font-size="11">geometry.c</text>
 <rect class="panel" x="32" y="670" width="1216" height="362" rx="8"/>
 <text class="t b" x="44" y="692" font-size="15">resize(dst, src, interpolation) 流程</text>
 <rect class="api" x="48" y="706" width="230" height="172" rx="6"/>
@@ -173,7 +173,7 @@
 <text class="t" x="163" y="803" font-size="12" text-anchor="middle">dst 為空 → return</text>
 <text class="t" x="163" y="820" font-size="12" text-anchor="middle">ASSERT src 非空</text>
 <text class="t" x="163" y="837" font-size="12" text-anchor="middle">目標尺寸 = dst 尺寸</text>
-<text class="t" x="163" y="858" font-size="12" text-anchor="middle">INTER_AREA → resize_area</text>
+<text class="t" x="163" y="858" font-size="12" text-anchor="middle">INTER_AREA 且不放大 → resize_area</text>
 <rect class="data" x="310" y="706" width="280" height="66" rx="6"/>
 <text class="m b" x="450" y="734.5" font-size="13" text-anchor="middle">INTER_NEAREST</text>
 <text class="t" x="450" y="752.5" font-size="12" text-anchor="middle">預先建表 x0[dw]</text>
@@ -183,21 +183,21 @@
 <text class="m" x="770" y="760.5" font-size="12" text-anchor="middle">resize_nearest_row(src 第 sy 列, ...)</text>
 <rect class="data" x="310" y="796" width="280" height="82" rx="6"/>
 <text class="m b" x="450" y="823.5" font-size="13" text-anchor="middle">INTER_LINEAR</text>
-<text class="t" x="450" y="841.5" font-size="12" text-anchor="middle">預先建表 x0[dw]、x1[dw]、fx[dw]</text>
+<text class="t" x="450" y="841.5" font-size="12" text-anchor="middle">預先建表 x0[dw]、x1[dw]、(a0, a1)[dw]</text>
 <text class="t" x="450" y="859.5" font-size="12" text-anchor="middle">（linear_coord，每欄一次）</text>
 <rect class="kern" x="620" y="796" width="300" height="82" rx="6"/>
 <text class="t" x="770" y="817.5" font-size="12" text-anchor="middle">每列：</text>
-<text class="m" x="770" y="833.5" font-size="12" text-anchor="middle">linear_coord(y, sh, dh) → y0, fy</text>
-<text class="m" x="770" y="849.5" font-size="12" text-anchor="middle">y1 = min(y0 + 1, sh − 1)（不建表）</text>
+<text class="m" x="770" y="833.5" font-size="12" text-anchor="middle">linear_coord(y, sh, dh) → y0, (b0, b1)</text>
+<text class="m" x="770" y="849.5" font-size="12" text-anchor="middle">y0、y1 夾在 0..sh − 1（不建表）</text>
 <text class="m" x="770" y="865.5" font-size="12" text-anchor="middle">resize_linear_row(r0, r1, ...)</text>
 <rect class="kern" x="950" y="706" width="282" height="172" rx="6"/>
-<text class="t b" x="1091" y="739.5" font-size="13" text-anchor="middle">雙線性（Q8 × Q8）</text>
-<text class="m" x="1091" y="758.5" font-size="12" text-anchor="middle">top = a0×(256 − fx) + a1×fx</text>
-<text class="m" x="1091" y="777.5" font-size="12" text-anchor="middle">bot = b0×(256 − fx) + b1×fx</text>
-<text class="m" x="1091" y="796.5" font-size="12" text-anchor="middle">d = (top×(256 − fy) + bot×fy</text>
-<text class="m" x="1091" y="815.5" font-size="12" text-anchor="middle">+ 32768) &gt;&gt; 16</text>
-<text class="t" x="1091" y="834.5" font-size="12" text-anchor="middle">a0, a1 = r0 的 x0, x1</text>
-<text class="t" x="1091" y="853.5" font-size="12" text-anchor="middle">b0, b1 = r1 的 x0, x1</text>
+<text class="t b" x="1091" y="739.5" font-size="13" text-anchor="middle">雙線性（Q11，同 OpenCV）</text>
+<text class="m" x="1091" y="758.5" font-size="12" text-anchor="middle">top = p00×a0 + p01×a1</text>
+<text class="m" x="1091" y="777.5" font-size="12" text-anchor="middle">bot = p10×a0 + p11×a1</text>
+<text class="m" x="1091" y="796.5" font-size="12" text-anchor="middle">t = (top»4)×b0»16 + (bot»4)×b1»16</text>
+<text class="m" x="1091" y="815.5" font-size="12" text-anchor="middle">d = (t + 2) &gt;&gt; 2</text>
+<text class="t" x="1091" y="834.5" font-size="12" text-anchor="middle">p00, p01 = r0 的 x0, x1</text>
+<text class="t" x="1091" y="853.5" font-size="12" text-anchor="middle">p10, p11 = r1 的 x0, x1</text>
 <path class="ar" d="M278 780 H294 V739 H308" marker-end="url(#arr)"/>
 <path class="ar" d="M278 804 H294 V837 H308" marker-end="url(#arr)"/>
 <path class="ar" d="M590 739 H618" marker-end="url(#arr)"/>
@@ -211,7 +211,7 @@
 <text class="t" x="770" y="922.5" font-size="12" text-anchor="middle">每個目的列 y：</text>
 <text class="m" x="770" y="939.5" font-size="12" text-anchor="middle">area_row_h → hrow（同一來源列只算一次）</text>
 <text class="m" x="770" y="956.5" font-size="12" text-anchor="middle">acc[i] += wy × hrow[i]</text>
-<text class="m" x="770" y="973.5" font-size="12" text-anchor="middle">d = (acc + den/2) / den</text>
+<text class="m" x="770" y="973.5" font-size="12" text-anchor="middle">d = acc / den，五成雙</text>
 <rect class="kern" x="950" y="902" width="282" height="82" rx="6"/>
 <text class="t b" x="1091" y="926.5" font-size="13" text-anchor="middle">整數加權平均</text>
 <text class="t" x="1091" y="946.5" font-size="12" text-anchor="middle">權重是整數重疊長度，沒有浮點，</text>
@@ -219,8 +219,8 @@
 <path class="ar" d="M278 852 H294 V943 H308" marker-end="url(#arr)"/>
 <path class="ar" d="M590 943 H618" marker-end="url(#arr)"/>
 <path class="ar" d="M920 943 H948" marker-end="url(#arr)"/>
-<text class="t g" x="48" y="1010" font-size="12">INTER_NEAREST、INTER_LINEAR：xs = int[2 × dw]（x0 = xs，x1 = xs + dw）；fxs = uint16_t[dw]；fast_malloc，improc_scratch_check（geometry.c:198-203）</text>
-<text class="t g" x="1232" y="1026" font-size="11" text-anchor="end">來源：geometry.c:55-92、177-232</text>
+<text class="t g" x="48" y="1010" font-size="12">INTER_NEAREST、INTER_LINEAR：xs = int[2 × dw]（x0 = xs，x1 = xs + dw）；fxs = (a0, a1)[dw]（每欄 4 位元組）；fast_malloc，improc_scratch_check</text>
+<text class="t g" x="1232" y="1026" font-size="11" text-anchor="end">來源：geometry.c</text>
 <rect class="panel" x="32" y="1052" width="1216" height="326" rx="8"/>
 <text class="t b" x="44" y="1074" font-size="15">INTER_AREA：整數重疊權重（例：sw = 4 → dw = 3，單位為 1/dw）</text>
 <text class="t g" x="44" y="1127" font-size="12">src（sw = 4）</text>
@@ -296,7 +296,7 @@
 <rect class="grid" x="900" y="1104" width="332" height="104"/>
 <text class="t g" x="900" y="1228" font-size="12">每列權重 = 該 dst 與各 src 的重疊長度</text>
 <text class="t" x="44" y="1274" font-size="12">dst 像素 d 蓋住 <tspan class="m">[d × s_len, (d+1) × s_len)</tspan>；src 像素 k 蓋住 <tspan class="m">[k × d_len, (k+1) × d_len)</tspan>（單位 1/d_len，每軸各自計算）</text>
-<text class="t" x="44" y="1292" font-size="12">權重 = 兩個區間的整數重疊長度；同一個 dst 像素的權重和 = <tspan class="m">s_len</tspan>。2D：<tspan class="m">den = sw × sh</tspan>，<tspan class="m">d = (Σ wy × (Σ wx × p) + den/2) / den</tspan>，整數四捨五入（半值進位）</text>
+<text class="t" x="44" y="1292" font-size="12">權重 = 兩個區間的整數重疊長度；同一個 dst 像素的權重和 = <tspan class="m">s_len</tspan>。2D：<tspan class="m">den = sw × sh</tspan>，<tspan class="m">d = round(Σ wy × (Σ wx × p) / den)</tspan>，四捨六入五成雙（剛好縮成一半時半值進位）</text>
 <text class="t" x="44" y="1310" font-size="12">例（1D，<tspan class="m">p = [10, 20, 30, 40]</tspan>，<tspan class="m">den = 4</tspan>）：<tspan class="m">dst 0 = (3×10 + 1×20 + 2) / 4 = 13</tspan>；<tspan class="m">dst 1 = (2×20 + 2×30 + 2) / 4 = 25</tspan>；<tspan class="m">dst 2 = (1×30 + 3×40 + 2) / 4 = 38</tspan></text>
 <text class="t g" x="44" y="1328" font-size="12">限制與暫存：<tspan class="m">sw × sh ≤ 2^24</tspan>（<tspan class="m">AREA_MAX_SRC_PIXELS</tspan>，255 × 2^24 &lt; 2^32，和不會溢位 <tspan class="m">uint32_t</tspan>）；scratch = <tspan class="m">2 × dw × cn × 4</tspan> bytes（hrow + acc），<tspan class="m">fast_malloc</tspan> + <tspan class="m">improc_scratch_check</tspan>，失敗 → ASSERT</text>
 <text class="t g" x="1232" y="1346" font-size="11" text-anchor="end">來源：geometry.c:94-175、190-193</text>

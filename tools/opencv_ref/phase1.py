@@ -37,13 +37,13 @@ def _resize(rows_fn, cols_fn, interpolation):
 _INVERT_LUT = np.arange(255, -1, -1, dtype=np.uint8)
 
 OPS = {
-    "gray": (lambda c: cv2.cvtColor(c.get("src"), cv2.COLOR_RGB2GRAY), 1, "COLOR_RGB2GRAY"),
+    "gray": (lambda c: cv2.cvtColor(c.get("src"), cv2.COLOR_RGB2GRAY), 0, "COLOR_RGB2GRAY, exact"),
     "bgr": (lambda c: cv2.cvtColor(c.get("src"), cv2.COLOR_RGB2BGR), 0, "COLOR_RGB2BGR"),
     "rgba": (lambda c: cv2.cvtColor(c.get("src"), cv2.COLOR_RGB2RGBA), 0, "COLOR_RGB2RGBA"),
     "thresh128": (lambda c: cv2.threshold(c.get("src"), 128, 255, cv2.THRESH_BINARY)[1], 0,
                   "THRESH_BINARY"),
     "invert": (lambda c: cv2.LUT(c.get("src"), _INVERT_LUT), 0, "LUT 255-i"),
-    "bright_384_10": (lambda c: cv2.convertScaleAbs(c.get("src"), alpha=1.5, beta=10), 1,
+    "bright_384_10": (lambda c: cv2.convertScaleAbs(c.get("src"), alpha=1.5, beta=10), 0,
                       "convertScaleAbs(1.5, 10)"),
     "box5": (lambda c: cv2.blur(c.get("src"), (5, 5)), 0, "cv2.blur 5x5, 0 expected"),
     "gauss3": (_gauss(3), 0, "GaussianBlur 3x3, 0 expected"),
@@ -54,10 +54,10 @@ OPS = {
     "flip_h": (_flip(1), 0, "flip 1"),
     "flip_v": (_flip(0), 0, "flip 0"),
     "flip_both": (_flip(-1), 0, "flip -1"),
-    "half_linear": (_resize(lambda r: r // 2, lambda w: w // 2, cv2.INTER_LINEAR), 1,
-                    "INTER_LINEAR"),
+    "half_linear": (_resize(lambda r: r // 2, lambda w: w // 2, cv2.INTER_LINEAR), 0,
+                    "INTER_LINEAR, exact 2x (OpenCV runs INTER_AREA)"),
     "nonint_linear": (_resize(lambda r: r * 5 // 12 + 1, lambda w: w * 3 // 7, cv2.INTER_LINEAR),
-                      1, "INTER_LINEAR"),
+                      0, "INTER_LINEAR, float32 positions emulated"),
     "double_nearest": (_resize(lambda r: r * 2, lambda w: w * 2, cv2.INTER_NEAREST_EXACT), 0,
                        "INTER_NEAREST_EXACT, integer ratio"),
 }

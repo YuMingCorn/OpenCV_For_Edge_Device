@@ -32,8 +32,8 @@ def _yuyv(c):
 OPS = {
     "bgr565_rgb": (lambda c: cv2.cvtColor(_bgr565(c), cv2.COLOR_BGR5652RGB), 0,
                    "COLOR_BGR5652RGB, exact"),
-    "bgr565be_gray": (_bgr565_be_gray, 1,
-                      "COLOR_BGR5652GRAY (we use the 77/150/29 gray formula)"),
+    "bgr565be_gray": (_bgr565_be_gray, 0,
+                      "COLOR_BGR5652GRAY, exact"),
     "yuyv_rgb": (lambda c: cv2.cvtColor(_yuyv(c), cv2.COLOR_YUV2RGB_YUYV), 0,
                  "COLOR_YUV2RGB_YUYV, exact"),
     "yuyv_gray": (lambda c: cv2.cvtColor(_yuyv(c), cv2.COLOR_YUV2GRAY_YUYV), 0,

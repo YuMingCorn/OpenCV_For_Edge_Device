@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/YuMingCorn/OpenCV_For_Edge_Device/actions/workflows/ci.yml/badge.svg)](https://github.com/YuMingCorn/OpenCV_For_Edge_Device/actions/workflows/ci.yml)
 
-improc 是一組用 C11 寫成的基本影像處理函式：色彩轉換、二值化、濾波、形態學、直方圖、幾何轉換。它不依賴 OpenCV 或其他影像處理函式庫，可以編進樹莓派、Cortex-M、ESP32 與 AVR。影像運算全部用整數定點運算，所以每個平台的輸出逐 byte 相同。
+improc 是一組用 C11 寫成的基本影像處理函式：色彩轉換、二值化、濾波、形態學、直方圖、幾何轉換。它不依賴 OpenCV 或其他影像處理函式庫，可以編進樹莓派、Cortex-M、ESP32 與 AVR。影像運算全部用整數定點運算，所以每個平台的輸出逐位元組相同。
 
 > **這個函式庫由 AI 撰寫。** 程式碼、測試與文件由 AI 程式設計助理（Anthropic 的 Claude，透過 Claude Code）寫成。維護者負責決定方向、審查每一個 pull request，並決定是否合併。正確性靠自動測試與和 OpenCV 的逐運算比對來確認，詳見[由 AI 開發](#由-ai-開發)。
 
@@ -30,7 +30,7 @@ improc 是一組用 C11 寫成的基本影像處理函式：色彩轉換、二�
 
 在微控制器上開發時，常常找不到能直接編譯上去的影像處理函式庫。OpenCV 太大，也需要作業系統。improc 提供一組小而完整的函式，目標是在受限裝置上「可重現、可驗證」：
 
-- **可重現。** 影像運算只用整數定點運算（只有選用的 `convert_to` 用單精度浮點，且不使用 FMA）。同一份 Kodak 雜湊清單在 Windows、Linux x64 與 aarch64 上都通過，輸出逐 byte 相同。所以在 PC 上算出的結果，可以直接當成裝置上的期望值。
+- **可重現。** 影像運算只用整數定點運算（只有選用的 `convert_to` 用單精度浮點，且不使用 FMA）。同一份 Kodak 雜湊清單在 Windows、Linux x64 與 aarch64 上都通過，輸出逐位元組相同。所以在 PC 上算出的結果，可以直接當成裝置上的期望值。
 - **適合受限裝置。** 核心只依賴 libc（開啟浮點時另加 libm），不需要檔案系統、執行緒或作業系統。暫存記憶體只與列寬和 `ksize` 有關，大小寫在文件裡。影像緩衝區可以由呼叫端提供；需要暫存的運算可以接上自己的配置器。
 - **可驗證。** 每個運算都有手算的小矩陣測試、與簡單參考實作的比對，以及在 24 張 Kodak 影像上與 OpenCV 的逐運算比對。
 
@@ -56,8 +56,8 @@ AI 寫的程式可能有人和 AI 都沒發現的錯誤，所以正確性不靠�
 
 - 每個運算都有手算期望值的小矩陣測試，並在寬度 0～65 上與測試內的簡單參考實作比對。
 - 24 張 Kodak 影像的輸出雜湊存在 `tests/golden/`。Windows（LLVM-MinGW）、Linux x64（GCC）與 aarch64（在 QEMU 上執行）都要得到相同的雜湊。
-- `tools/compare_opencv.py` 把每個運算的輸出與 OpenCV 比對，並檢查各自的容許誤差。多數運算與 OpenCV 逐 byte 相同，其餘運算的最大差異是 1。結果見 [docs/kodak-results.md](docs/kodak-results.md)。
-- CI 在每個 pull request 上跑單元測試（Windows、Linux、macOS 與 QEMU 上的 aarch64），並交叉編譯到樹莓派、Cortex-M、ESP32 與 AVR。Kodak 資料集不在版本庫內，所以 Kodak 雜湊與 OpenCV 比對不在 CI 上跑，而是在合併前於本機執行。
+- `tools/compare_opencv.py` 把每個運算的輸出與 OpenCV 比對，並檢查各自的容許誤差。在 Kodak 上，多數運算與 OpenCV 逐位元組相同，其餘運算的最大差異是 1；`tools/sweep_opencv.py` 另用窮舉與隨機尺寸比對，`INTER_AREA` 放大時少數欄會整欄不同。結果見 [docs/kodak-results.md](docs/kodak-results.md)。
+- CI 在每個 pull request 上跑單元測試（Windows、Linux、macOS 與 QEMU 上的 aarch64），並交叉編譯到樹莓派、Cortex-M、ESP32 與 AVR。Kodak 資料集不在儲存庫內，所以 Kodak 雜湊與 OpenCV 比對不在 CI 上跑，而是在合併前於本機執行。
 
 還沒有驗證的部分：macOS 沒有跑過 Kodak 雜湊比對；微控制器（Cortex-M、ESP32、AVR）只驗證過編譯與程式大小，還沒有在實機上比對輸出；樹莓派的測試是在 QEMU 模擬器上跑的，還沒有在實機上跑。用在重要的產品前，請在自己的硬體上跑一次測試。
 
@@ -244,7 +244,7 @@ arm-none-eabi-ar rcs libimproc_core.a *.o
 
 | 範例 | 板子 | 內容 |
 |---|---|---|
-| `examples/Synthetic` | RAM 約 128 KB 以上的板子（ESP32、ESP32-S3、Cortex-M） | 用內建的合成圖跑「灰階 → Gaussian 5x5 → Otsu」，印出每一步的時間與雜湊。雜湊和 PC 相同時印出 `PASS`，代表這塊板子的輸出和 PC 逐 byte 相同 |
+| `examples/Synthetic` | RAM 約 128 KB 以上的板子（ESP32、ESP32-S3、Cortex-M） | 用內建的合成圖跑「灰階 → Gaussian 5x5 → Otsu」，印出每一步的時間與雜湊。雜湊和 PC 相同時印出 `PASS`，代表這塊板子的輸出和 PC 逐位元組相同 |
 | `examples/CameraOtsu` | AI-Thinker ESP32-CAM | 從相機抓 QVGA 灰階畫面，做 Gaussian 與 Otsu 二值化，印出時間、門檻值與白色像素比例 |
 
 > 目前狀態：兩個範例都已用 arduino-cli（esp32 core 3.3.12）為 ESP32-CAM 編譯成功，`Synthetic` 也為 ESP32-S3 編譯成功。兩者都還沒在實機上執行，PlatformIO 也還沒實際編譯過。Arduino Uno 的 RAM 不夠執行 `Synthetic`。
@@ -461,9 +461,9 @@ int32_t nm = match_descriptors(m, da, na, db, nb, 1);  // 交叉檢查
 
 | 模組 | 函式 | 說明 |
 |---|---|---|
-| `color.h` | `cvt_color` | GRAY、RGB、BGR、RGBA、BGRA 互轉；灰階用 `(77R + 150G + 29B + 128) >> 8` |
-| `color.h` | `cvt_color`（HSV、YUV） | RGB／BGR 與 HSV（H 0～179）互轉；RGB／BGR 與 YUV（JFIF 全範圍 BT.601）互轉 |
-| `color.h` | `cvt_color`（相機格式） | RGB565（`CV_8UC2`，小端序與相機常用的大端序 `BE`）轉 BGR／RGB／GRAY；YUV422 YUYV 轉 BGR／RGB／GRAY（有限範圍 BT.601，與 OpenCV 逐 byte 相同，寬度須為偶數） |
+| `color.h` | `cvt_color` | GRAY、RGB、BGR、RGBA、BGRA 互轉；灰階用 OpenCV 的 Q15 權重 `(9798R + 19235G + 3735B + 16384) >> 15` |
+| `color.h` | `cvt_color`（HSV、YUV） | RGB／BGR 與 HSV（H 0～179）互轉；RGB／BGR 與 YUV（OpenCV 的 YCrCb 常數，色度通道順序對調）互轉；與 OpenCV 逐位元組相同，只有 HSV 轉 RGB 在每列最後「寬度 % 32」個像素例外（見 [docs/kodak-results.md](docs/kodak-results.md)） |
+| `color.h` | `cvt_color`（相機格式） | RGB565（`CV_8UC2`，小端序與相機常用的大端序 `BE`）轉 BGR／RGB／GRAY；YUV422 YUYV 轉 BGR／RGB／GRAY（有限範圍 BT.601，與 OpenCV 逐位元組相同，寬度須為偶數） |
 | `pixel.h` | `threshold` | BINARY、BINARY_INV、TRUNC、TOZERO、TOZERO_INV |
 | `pixel.h` | `mat_lut` | 256 項查表 |
 | `pixel.h` | `absdiff` | 兩張影像逐通道相減取絕對值，用於畫面差分（動態偵測） |
@@ -496,7 +496,7 @@ ctest --test-dir build --output-on-failure
 
 ### Kodak 測試
 
-`test_kodak_*` 用 24 張 Kodak 影像跑每個運算，把輸出的 FNV-1a 雜湊與 `tests/golden/kodak_*.txt` 比對，確認各平台逐 byte 相同。資料集不在版本庫內（`datasets/` 已被 git 忽略）。請自行從 <https://r0k.us/graphics/kodak/> 下載 `kodim01.png`～`kodim24.png`，放進 `datasets/kodak`。沒有資料集時，這些測試會顯示為 Skipped，其餘測試照常執行。要用其他位置時，設定環境變數 `IMPROC_KODAK_DIR`，或在 CMake 加 `-DIMPROC_KODAK_DIR=<目錄>`。
+`test_kodak_*` 用 24 張 Kodak 影像跑每個運算，把輸出的 FNV-1a 雜湊與 `tests/golden/kodak_*.txt` 比對，確認各平台逐位元組相同。資料集不在儲存庫內（`datasets/` 已被 git 忽略）。請自行從 <https://r0k.us/graphics/kodak/> 下載 `kodim01.png`～`kodim24.png`，放進 `datasets/kodak`。沒有資料集時，這些測試會顯示為 Skipped，其餘測試照常執行。要用其他位置時，設定環境變數 `IMPROC_KODAK_DIR`，或在 CMake 加 `-DIMPROC_KODAK_DIR=<目錄>`。
 
 ### 與 OpenCV 比對
 

@@ -1,7 +1,10 @@
+#include <float.h>
+#include <math.h>
 #include <setjmp.h>
 #include <stdint.h>
 
 #include "geometry.h"
+#include "improc_internal.h"
 #include "test_alloc_util.h"
 #include "test_expect_assert.h"
 #include "test_mat_util.h"
@@ -108,7 +111,9 @@ static void test_resize_linear_2d(void) {
                            75, 100, 150, 175, 100, 125, 175, 200};
     resize_bytes(INTER_LINEAR, CV_8UC1, 2, 2, 4, 4, b, b_out);
     const uchar c[]     = {0, 90, 180, 255};
-    const uchar c_out[] = {0, 45, 90, 90, 131, 173, 180, 218, 255};
+    // Values from cv2.resize(..., INTER_LINEAR), OpenCV 4.10.0. The 217 comes
+    // from the two truncating products in the vertical step.
+    const uchar c_out[] = {0, 45, 90, 90, 131, 173, 180, 217, 255};
     resize_bytes(INTER_LINEAR, CV_8UC1, 2, 2, 3, 3, c, c_out);
 }
 
@@ -264,11 +269,168 @@ static void test_area_rgb_channels_independent(void) {
     resize_bytes(INTER_AREA, CV_8UC3, 1, 3, 1, 2, in, out);
 }
 
+// ---- Naive references for OpenCV's 8-bit INTER_LINEAR and INTER_AREA ------
+// Written per output pixel, with no tables. The INTER_LINEAR position is
+// computed with double and float exactly as OpenCV's resize.cpp does, so it
+// checks the integer float32 emulation in core/geometry.c independently.
+#if FLT_EVAL_METHOD != 0
+#error "ref_coord needs float arithmetic evaluated in float"
+#endif
+
+// round(num * 2048 / den), half to even; num >= 0, den > 0.
+static int64_t ref_q11(int64_t num, int64_t den) {
+    int64_t f = num * 2048 / den;
+    int64_t m = num * 2048 - f * den;
+    return f + (2 * m > den || (2 * m == den && (f & 1)));
+}
+
+// Source index i and the Q11 weights w0 (pixel i) and w1 (pixel i + 1) for
+// destination index d. Area (upscale): i = floor(d s / dl), w1 = max(0,
+// (d + 1) s - (i + 1) dl) / s exactly. clamp: the x axis.
+static void ref_coord(int64_t d, int64_t s, int64_t dl, int area, int clamp,
+                      int64_t *i, int64_t *w0, int64_t *w1) {
+    if (area) {
+        *i          = d * s / dl;
+        int64_t num = (d + 1) * s - (*i + 1) * dl;
+        *w1         = ref_q11(num > 0 ? num : 0, s);
+        *w0         = 2048 - *w1;
+    } else {
+        double scale = 1.0 / ((double)dl / (double)s);
+        float  fx    = (float)(((double)d + 0.5) * scale - 0.5);
+        float  fl    = floorf(fx);
+        fx -= fl;
+        *i  = (int64_t)fl;
+        *w1 = lrintf(fx * 2048.0f);
+        *w0 = lrintf((1.0f - fx) * 2048.0f);
+    }
+    if (clamp && (*i < 0 || *i >= s - 1)) {
+        *i  = *i < 0 ? 0 : s - 1;
+        *w0 = 2048;
+        *w1 = 0;
+    }
+}
+
+static int64_t ref_clampi(int64_t v, int64_t hi) {
+    return v < 0 ? 0 : v > hi ? hi : v;
+}
+
+static void linear_reference(struct Mat *dst, const struct Mat *src, int area) {
+    int64_t sw = src->cols, sh = src->rows;
+    int     cn = (int)mat_channel_num(src);
+    for (int y = 0; y < dst->rows; y++) {
+        int64_t sy, b0, b1;
+        ref_coord(y, sh, dst->rows, area, 0, &sy, &b0, &b1);
+        int r0 = (int)ref_clampi(sy, sh - 1), r1 = (int)ref_clampi(sy + 1, sh - 1);
+        for (int x = 0; x < dst->cols; x++) {
+            int64_t sx, a0, a1;
+            ref_coord(x, sw, dst->cols, area, 1, &sx, &a0, &a1);
+            int c0 = (int)sx, c1 = (int)ref_clampi(sx + 1, sw - 1);
+            for (int c = 0; c < cn; c++) {
+                int64_t p00 = ((const uchar *)mat_at(src, r0, c0))[c];
+                int64_t p01 = ((const uchar *)mat_at(src, r0, c1))[c];
+                int64_t p10 = ((const uchar *)mat_at(src, r1, c0))[c];
+                int64_t p11 = ((const uchar *)mat_at(src, r1, c1))[c];
+                int64_t h0  = p00 * a0 + p01 * a1;
+                int64_t h1  = p10 * a0 + p11 * a1;
+                int64_t t   = (h0 / 16) * b0 / 65536 + (h1 / 16) * b1 / 65536;
+                ((uchar *)mat_at(dst, y, x))[c] = (uchar)((t + 2) / 4);
+            }
+        }
+    }
+}
+
+// The pixels a coordinate entry actually reads after the row/column clamp,
+// with their weights. Only a zero weight is folded away, so i = -1 with
+// (0, 2048) and i = 0 with (2048, 0) compare equal. Two nonzero weights on the
+// same clamped row are kept apart: the vertical step truncates each row term
+// on its own, so their split changes the output.
+struct EffCoord {
+    int64_t p0, p1, w0, w1;
+};
+
+static struct EffCoord eff_coord(int64_t i, int64_t w0, int64_t w1, int64_t s) {
+    struct EffCoord e = {ref_clampi(i, s - 1), ref_clampi(i + 1, s - 1), w0, w1};
+    if (e.w1 == 0) {
+        e.p1 = e.p0;
+    } else if (e.w0 == 0) {
+        e.p0 = e.p1;
+        e.w0 = e.w1;
+        e.w1 = 0;
+    }
+    return e;
+}
+
+static int check_coord(int sw, int dw, int d, int clamp) {
+    int      i;
+    uint16_t a0, a1;
+    int64_t  ri, r0, r1;
+    improc_resize_coord(d, sw, dw, 0, clamp, &i, &a0, &a1);
+    ref_coord(d, sw, dw, 0, clamp, &ri, &r0, &r1);
+    struct EffCoord x = eff_coord(i, a0, a1, sw), y = eff_coord(ri, r0, r1, sw);
+    if (x.p0 != y.p0 || x.p1 != y.p1 || x.w0 != y.w0 || x.w1 != y.w1) {
+        TEST_FAIL_("coord sw=%d dw=%d d=%d clamp=%d: %d %d %d, want %d %d %d",
+                   sw, dw, d, clamp, i, a0, a1, (int)ri, (int)r0, (int)r1);
+        return 1;
+    }
+    return 0;
+}
+
+// Every coordinate table resize builds, against the float reference, over a
+// dense grid of sizes up to 4096 and some large ones. Above 4096 an exact
+// position can be a float32 midpoint, where OpenCV's double error decides,
+// so the large sizes are checked only at their first and last entries, where
+// the position is tiny or clamped.
+static void test_resize_coord_tables(void) {
+    static const int big[][2] = {{4000, 3333}, {3000, 2222}, {2000, 1111},
+                                 {1024, 777},  {1920, 1280}, {3000, 4321},
+                                 {4096, 4095}, {768, 329},   {512, 214}};
+    static const int huge[][2] = {
+        {100000, 100001}, {100001, 100000}, {70000, 69999},
+        {40001, 40000},   {781742734, 781735375}, {65536, 65535},
+        {20000, 20001},   {1, 237},
+        // dw > 2^24 with a negative position at d = 0: fx + 1 rounds to 1.0.
+        {1 << 25, (1 << 25) + 1}, {(1 << 25) - 1, (1 << 25) + 1},
+        {(1 << 26) - 3, 1 << 26}};
+    int bad = 0;
+    for (int k = 0; k < 2000 && bad < 5; k++) {
+        int sw, dw;
+        if (k < (int)(sizeof big / sizeof big[0])) {
+            sw = big[k][0];
+            dw = big[k][1];
+        } else {
+            sw = 1 + (k * 7919) % 4096;
+            dw = 1 + (k * 104729) % 4096;
+        }
+        for (int clamp = 0; clamp < 2; clamp++) {
+            for (int d = 0; d < dw && bad < 5; d++) {
+                bad += check_coord(sw, dw, d, clamp);
+            }
+        }
+    }
+    for (size_t k = 0; k < sizeof huge / sizeof huge[0]; k++) {
+        int sw = huge[k][0], dw = huge[k][1];
+        for (int clamp = 0; clamp < 2; clamp++) {
+            for (int j = 0; j < 4 && j < dw; j++) {
+                bad += check_coord(sw, dw, j, clamp);
+                bad += check_coord(sw, dw, dw - 1 - j, clamp);
+            }
+        }
+    }
+}
+
+// Downscale: the exact area mean, half to even, except an exact 2x2
+// reduction, which rounds half up. Upscale on either axis: the linear kernel
+// with the area mapping.
 static void area_reference(struct Mat *dst, const struct Mat *src) {
     uint64_t sw = (uint64_t)src->cols, sh = (uint64_t)src->rows;
     uint64_t dw = (uint64_t)dst->cols, dh = (uint64_t)dst->rows;
-    int      cn  = (int)mat_channel_num(src);
-    uint64_t den = sw * sh;
+    if (dw > sw || dh > sh) {
+        linear_reference(dst, src, 1);
+        return;
+    }
+    int      cn      = (int)mat_channel_num(src);
+    uint64_t den     = sw * sh;
+    int      half_up = sw == 2 * dw && sh == 2 * dh;
     for (uint64_t y = 0; y < dh; y++) {
         for (uint64_t x = 0; x < dw; x++) {
             for (int c = 0; c < cn; c++) {
@@ -283,7 +445,9 @@ static void area_reference(struct Mat *dst, const struct Mat *src) {
                         acc += wy * wx * ((const uchar *)mat_at(src, (int)sy, (int)sx))[c];
                     }
                 }
-                ((uchar *)mat_at(dst, (int)y, (int)x))[c] = (uchar)((acc + den / 2) / den);
+                uint64_t q = acc / den, r = acc % den;
+                q += half_up ? 2 * r >= den : 2 * r > den || (2 * r == den && (q & 1));
+                ((uchar *)mat_at(dst, (int)y, (int)x))[c] = (uchar)q;
             }
         }
     }
@@ -332,6 +496,41 @@ static void test_area_2d_sweep(void) {
     }
     check_area_against_reference(CV_8UC3, 40, 64, 17, 29, 5);
     check_area_against_reference(CV_8UC1, 3, 65, 65, 3, 9);
+}
+
+static void check_linear_against_reference(int type, int srows, int scols,
+                                           int drows, int dcols,
+                                           unsigned seed) {
+    struct Mat *src = alloc_mat(srows, scols, type);
+    struct Mat *dst = alloc_mat(drows, dcols, type);
+    struct Mat *ref = alloc_mat(drows, dcols, type);
+    fill_pattern(src, seed);
+    resize(dst, src, INTER_LINEAR);
+    linear_reference(ref, src, 0);
+    CHECK_MAT_BYTES(dst, ref->data);
+    free_mat(&ref);
+    free_mat(&dst);
+    free_mat(&src);
+}
+
+static void test_resize_linear_2d_sweep(void) {
+    static const int types[] = {CV_8UC1, CV_8UC3, CV_8UC4};
+    for (int t = 0; t < 3; t++) {
+        for (int sr = 1; sr <= 7; sr++) {
+            for (int sc = 1; sc <= 7; sc++) {
+                for (int dr = 1; dr <= 15; dr += 2) {
+                    for (int dc = 1; dc <= 15; dc += 2) {
+                        check_linear_against_reference(types[t], sr, sc, dr, dc,
+                                                       (unsigned)(sr * 7 + sc));
+                    }
+                }
+            }
+        }
+    }
+    for (int dw = 1; dw <= 65; dw++) {
+        check_linear_against_reference(CV_8UC3, 5, 23, 4, dw, (unsigned)dw);
+    }
+    check_linear_against_reference(CV_8UC1, 512, 768, 214, 329, 3);
 }
 
 static void test_area_constant_255(void) {
@@ -515,6 +714,8 @@ int main(void) {
     RUN_TEST(test_flip_both_is_h_then_v);
     RUN_TEST(test_resize_linear_1d);
     RUN_TEST(test_resize_linear_2d);
+    RUN_TEST(test_resize_linear_2d_sweep);
+    RUN_TEST(test_resize_coord_tables);
     RUN_TEST(test_resize_same_size_identity);
     RUN_TEST(test_resize_linear_rgb);
     RUN_TEST(test_resize_linear_constant);

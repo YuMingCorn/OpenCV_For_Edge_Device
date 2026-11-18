@@ -2,10 +2,10 @@
 
 #include <stdint.h>
 
-// Largest value is (77 + 150 + 29) * 255 + 128 = 256 * 255 + 128 = 65408, which
-// fits a 16-bit unsigned, so this is safe where int is 16 bits.
-static inline uchar luma(unsigned r, unsigned g, unsigned b) {
-    return (uchar)((77u * r + 150u * g + 29u * b + 128u) >> 8);
+// OpenCV's Q15 gray weights (RGB2GRAY and BGR5652GRAY). The sum reaches
+// 32768 * 255 + 16384, so it needs uint32_t where int is 16 bits.
+static inline uchar luma(uint32_t r, uint32_t g, uint32_t b) {
+    return (uchar)((9798u * r + 19235u * g + 3735u * b + 16384u) >> 15);
 }
 
 static void rgb2gray_row(const uchar *restrict s, uchar *restrict d,
@@ -224,15 +224,79 @@ static inline void rgb2hsv_px(int32_t r, int32_t g, int32_t b, uchar *d) {
     d[2] = (uchar)v;
 }
 
-// Products reach 255 * 7650 = 1950750, which needs 32 bits (AVR int is 16).
+// HSV to RGB reproduces OpenCV's 8-bit vector code bit for bit, without float
+// hardware. That code works in float32: S = s * (1/255), V = v * (1/255),
+// H = h * (6/180), F = H - trunc(H), then V (1 - S), V (1 - S F) and
+// V (1 - S (1 - F)), where 1 - S F and 1 - S (1 - F) are fused multiply-adds
+// (one rounding). Each result is multiplied by 255 and truncated, not rounded.
+//
+// An F32 is the non-negative float32 value m * 2^e. f32_round rounds m * 2^e
+// to 24 significant bits, ties to even, as float32 arithmetic does. All values
+// here lie in [0, 256], so no overflow, underflow or subnormal case arises.
+struct F32 {
+    uint64_t m;
+    int      e;
+};
+
+static struct F32 f32_round(uint64_t m, int e) {
+    int n = 0;
+    while ((m >> n) >= ((uint64_t)1 << 24)) {
+        n++;
+    }
+    if (n > 0) {
+        uint64_t q    = m >> n;
+        uint64_t r    = m & (((uint64_t)1 << n) - 1u);
+        uint64_t half = (uint64_t)1 << (n - 1);
+        q += r > half || (r == half && (q & 1u));
+        m = q;
+        e += n;
+    }
+    return (struct F32){m, e};
+}
+
+static struct F32 f32_mul(struct F32 a, struct F32 b) {
+    return f32_round(a.m * b.m, a.e + b.e); // both m <= 2^24
+}
+
+// 1 - a * b with a single rounding, for a * b <= 1. Here -59 <= a.e + b.e < 0
+// (S has e in [-31, -23], F and 1 - F have e in [-28, -1]), so
+// 2^-(a.e + b.e) fits in 64 bits.
+static struct F32 f32_one_minus_mul(struct F32 a, struct F32 b) {
+    int e = a.e + b.e;
+    return f32_round(((uint64_t)1 << -e) - a.m * b.m, e);
+}
+
+static struct F32 f32_one_minus(struct F32 a) {
+    return f32_one_minus_mul(a, (struct F32){1, 0});
+}
+
+// trunc(x * 255) for x in [0, 1.0000001]. A zero keeps the exponent of the
+// subtraction that produced it, which can be below -63, so it returns early
+// instead of shifting that far.
+static uint32_t f32_trunc_255(struct F32 x) {
+    struct F32 y = f32_round(x.m * 255u, x.e);
+    if (y.m == 0 || y.e <= -64) {
+        return 0;
+    }
+    return (uint32_t)(y.e >= 0 ? y.m << y.e : y.m >> -y.e);
+}
+
+#define F32_INV255 ((struct F32){8421505u, -31}) // float32(1/255)
+#define F32_HSCALE ((struct F32){8947849u, -28}) // float32(6/180)
+
 static inline void hsv2rgb_px(uint32_t h, uint32_t s, uint32_t v, int swap,
                               uchar *d) {
-    h %= 180u;
-    uint32_t sec = h / 30u;
-    uint32_t f   = h - 30u * sec;
-    uint32_t p   = (v * (255u - s) + 127u) / 255u;
-    uint32_t q   = (v * (7650u - s * f) + 3825u) / 7650u;
-    uint32_t t   = (v * (7650u - s * (30u - f)) + 3825u) / 7650u;
+    struct F32 hh  = f32_round(h * F32_HSCALE.m, F32_HSCALE.e); // < 8.5, e < 0
+    uint32_t   k   = (uint32_t)(hh.m >> -hh.e);
+    struct F32 f   = {hh.m - ((uint64_t)k << -hh.e), hh.e}; // exact
+    struct F32 sf  = f32_round(s * F32_INV255.m, F32_INV255.e);
+    struct F32 vf  = f32_round(v * F32_INV255.m, F32_INV255.e);
+    uint32_t   sec = k % 6u;
+    uint32_t   p   = f32_trunc_255(f32_mul(vf, f32_one_minus(sf)));
+    uint32_t   q   = f32_trunc_255(f32_mul(vf, f32_one_minus_mul(sf, f)));
+    uint32_t   t =
+        f32_trunc_255(f32_mul(vf, f32_one_minus_mul(sf, f32_one_minus(f))));
+    v = f32_trunc_255(vf);
     uint32_t r, g, b;
     switch (sec) {
     case 0:
@@ -283,42 +347,41 @@ static void hsv2bgr_row(const uchar *restrict s, uchar *restrict d, int width) {
     }
 }
 
-// ---- YUV (JFIF full-range BT.601; U is Cb and V is Cr, both centred on 128)
-// -- Fixed point, 8 fractional bits. The offset 32896 is 128 * 256 + 128: the
-// chroma centre plus the rounding term.
+// ---- YUV (OpenCV's YCrCb; U is Cb and V is Cr, both centred on 128) -------
+// OpenCV's Q14 integer constants. Forward: Y from the R2Y, G2Y, B2Y weights,
+// then Cr = (R - Y) * 0.713 and Cb = (B - Y) * 0.564, both from the rounded Y.
+// Inverse: R = Y + 1.403 Cr, G = Y - 0.714 Cr - 0.344 Cb, B = Y + 1.773 Cb.
 
-// Y is at most 256 * 255 + 128 = 65408. The U and V sums are at least 256 and
-// at most 255 * 128 + 32896 = 65536, so uint32_t never wraps; the min clamp
-// handles the single overflow value 65536 >> 8 = 256.
-static inline void rgb2yuv_px(uint32_t r, uint32_t g, uint32_t b, uchar *d) {
-    uint32_t u = (32896u - 43u * r - 85u * g + 128u * b) >> 8;
-    uint32_t v = (32896u + 128u * r - 107u * g - 21u * b) >> 8;
-    d[0]       = (uchar)((77u * r + 150u * g + 29u * b + 128u) >> 8);
-    d[1]       = (uchar)(u > 255u ? 255u : u);
-    d[2]       = (uchar)(v > 255u ? 255u : v);
+#define YUV_SHIFT 14
+#define YUV_HALF  ((int32_t)1 << (YUV_SHIFT - 1))
+
+// round(x / 2^14) for a signed x, without shifting a negative value: the
+// offset 2^24 is a multiple of 2^14 and keeps every x used here non-negative.
+static inline int32_t yuv_descale(int32_t x) {
+    const int32_t bias = (int32_t)1 << 24;
+    return ((x + YUV_HALF + bias) >> YUV_SHIFT) - (bias >> YUV_SHIFT);
 }
 
-// c() clamps to 0..255 without shifting a negative value.
-static inline uchar yuv_clamp(int32_t x) {
-    if (x < 0) {
-        return 0;
-    }
-    x >>= 8;
-    return (uchar)(x > 255 ? 255 : x);
+static inline uchar yuv_sat(int32_t x) {
+    return (uchar)(x < 0 ? 0 : x > 255 ? 255 : x);
 }
 
-// Terms stay within about +-2^17, so int32_t is needed on AVR.
+// |(R - Y) * 11682| <= 255 * 11682 < 2^22, so int32_t holds every term.
+static inline void rgb2yuv_px(int32_t r, int32_t g, int32_t b, uchar *d) {
+    int32_t y = yuv_descale(4899 * r + 9617 * g + 1868 * b);
+    d[0]      = (uchar)y;
+    d[1]      = yuv_sat(128 + yuv_descale((b - y) * 9241));
+    d[2]      = yuv_sat(128 + yuv_descale((r - y) * 11682));
+}
+
+// |cr * 22987| <= 128 * 29049 < 2^22, so int32_t holds every term.
 static inline void yuv2rgb_px(int32_t y, int32_t u, int32_t v, int swap,
                               uchar *d) {
     int32_t cb      = u - 128;
     int32_t cr      = v - 128;
-    int32_t y8      = 256 * y + 128;
-    uchar   r       = yuv_clamp(y8 + 359 * cr);
-    uchar   g       = yuv_clamp(y8 - 88 * cb - 183 * cr);
-    uchar   b       = yuv_clamp(y8 + 454 * cb);
-    d[swap ? 2 : 0] = r;
-    d[1]            = g;
-    d[swap ? 0 : 2] = b;
+    d[swap ? 2 : 0] = yuv_sat(y + yuv_descale(22987 * cr));
+    d[1]            = yuv_sat(y + yuv_descale(-11698 * cr - 5636 * cb));
+    d[swap ? 0 : 2] = yuv_sat(y + yuv_descale(29049 * cb));
 }
 
 static void rgb2yuv_row(const uchar *restrict s, uchar *restrict d, int width) {

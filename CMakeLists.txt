@@ -136,6 +136,11 @@ add_executable(bench_gray benchmarks/bench_gray.c)
 improc_warnings(bench_gray)
 target_link_libraries(bench_gray PRIVATE improc)
 
+# Raw-file runner for tools/sweep_opencv.py.
+add_executable(improc_probe tools/improc_probe.c)
+improc_warnings(improc_probe)
+target_link_libraries(improc_probe PRIVATE improc)
+
 enable_testing()
 
 function(add_improc_test name)

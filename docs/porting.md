@@ -136,7 +136,7 @@ Cortex-M0+（`-fstack-usage`）最大的五個堆疊框：
 | `erode`、`dilate`、`morph_open`、`morph_close` | `n`（一列；`morph_open`／`morph_close` 另需呼叫端提供一張同尺寸的 `tmp`） |
 | `equalize_hist` | 1280（直方圖 1024 加查表 256） |
 | `otsu_threshold` | 1024 |
-| `resize`（`INTER_NEAREST`、`INTER_LINEAR`） | `dst_cols * (2 * sizeof(int) + 2)` |
+| `resize`（`INTER_NEAREST`、`INTER_LINEAR`） | `dst_cols * (2 * sizeof(int) + 4)` |
 | `resize`（`INTER_AREA`） | `2 * dst_cols * cn * 4` |
 | `fast_detect` | 有非極大值抑制：`3 * cols`（三列分數）；沒有：0。角點陣列由呼叫端提供 |
 | `orb_detect` | `n * (sizeof(struct KeyPoint) + 16)`（`n` 為 FAST 角點數，AVR 上每個 28 位元組），執行 FAST 時另加 `3 * cols`。關鍵點陣列由呼叫端提供 |

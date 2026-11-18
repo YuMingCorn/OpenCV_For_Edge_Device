@@ -71,43 +71,208 @@ static void resize_nearest_row(const uchar *restrict s, uchar *restrict d,
     }
 }
 
+// OpenCV's INTER_LINEAR for 8-bit images. Weights are Q11 and sum to 2048 up
+// to one unit of rounding (OpenCV rounds the two weights separately). The
+// horizontal sum h = a0 * p0 + a1 * p1 is at most 255 * 2049. The vertical
+// step follows OpenCV's vector code: each row term is ((h >> 4) * b) >> 16,
+// and the two terms are added and rounded with (t + 2) >> 2. (h >> 4) * b is
+// below 2^31, and nothing negative is shifted.
+#define LINEAR_ONE 2048
+
+struct LinearWeights {
+    uint16_t a0; // weight of pixel i
+    uint16_t a1; // weight of pixel i + 1
+};
+
 static void resize_linear_row(const uchar *restrict r0,
                               const uchar *restrict r1, uchar *restrict d,
                               int dst_w, int cn, const int *x0, const int *x1,
-                              const uint16_t *fx, uint16_t fy) {
+                              const struct LinearWeights *ax,
+                              struct LinearWeights by) {
     for (int x = 0; x < dst_w; x++, d += cn) {
-        const uchar *a0 = r0 + (size_t)x0[x] * (size_t)cn;
-        const uchar *a1 = r0 + (size_t)x1[x] * (size_t)cn;
-        const uchar *b0 = r1 + (size_t)x0[x] * (size_t)cn;
-        const uchar *b1 = r1 + (size_t)x1[x] * (size_t)cn;
-        uint32_t     f  = fx[x];
+        const uchar *p0 = r0 + (size_t)x0[x] * (size_t)cn;
+        const uchar *p1 = r0 + (size_t)x1[x] * (size_t)cn;
+        const uchar *q0 = r1 + (size_t)x0[x] * (size_t)cn;
+        const uchar *q1 = r1 + (size_t)x1[x] * (size_t)cn;
+        int32_t      a0 = ax[x].a0, a1 = ax[x].a1;
         for (int c = 0; c < cn; c++) {
-            uint32_t top = a0[c] * (256u - f) + a1[c] * f;
-            uint32_t bot = b0[c] * (256u - f) + b1[c] * f;
-            d[c] = (uchar)((top * (256u - (uint32_t)fy) + bot * (uint32_t)fy +
-                            32768u) >>
-                           16);
+            int32_t top = p0[c] * a0 + p1[c] * a1;
+            int32_t bot = q0[c] * a0 + q1[c] * a1;
+            int32_t t   = (((top >> 4) * by.a0) >> 16) + (((bot >> 4) * by.a1) >> 16);
+            d[c]        = (uchar)((t + 2) >> 2);
         }
     }
 }
 
-// Half-pixel centre mapping of destination index dx to source position, in
-// Q8 as (x0, fx) with x1 = min(x0 + 1, sw - 1).
-static void linear_coord(int dx, int sw, int dw, int *x0, uint16_t *fx) {
-    int64_t n = (int64_t)(2 * (int64_t)dx + 1) * sw - dw;
-    int64_t d = 2 * (int64_t)dw;
-    int64_t i = 0;
-    int64_t f = 0;
-    if (n >= 0) {
-        i = n / d;
-        f = ((n - i * d) * 256 + dw) / d;
-        if (i >= sw - 1) {
-            i = sw - 1;
-            f = 0;
+// ---- float32 emulation for the INTER_LINEAR source positions -------------
+// OpenCV computes fx = (float)((dx + 0.5) * scale - 0.5) in double and float,
+// then sx = floor(fx), fx -= sx, a1 = cvRound(fx * 2048) and
+// a0 = cvRound((1.f - fx) * 2048). Here fx is the float32 nearest to the
+// exact position ((2 dx + 1) sw - dw) / (2 dw), ties to even, and every
+// float32 value is the exact fraction num / 2^sh. That equals OpenCV except
+// when the exact position is itself a float32 midpoint: OpenCV's double
+// error then picks the side. This never happens up to 4096 pixels and stays
+// below 0.1% of the samples in the larger sizes measured.
+
+// Rounds u / d (d > 0) to 24 significant bits, ties to even, as m / 2^sh.
+// Only called with d = 2 dw <= 2^32. When the numerator is shifted up it ends below 2^(25 + 33),
+// and when the denominator is, it ends below 2^(64 - 23), so nothing wraps.
+static void f32_ratio(uint64_t u, uint64_t d, uint64_t *m, int *sh) {
+    if (u == 0) {
+        *m  = 0;
+        *sh = 0;
+        return;
+    }
+    int bu = 0, bd = 0;
+    while ((u >> bu) != 0) {
+        bu++;
+    }
+    while ((d >> bd) != 0) {
+        bd++;
+    }
+    // u / d lies in [2^(bu - bd - 1), 2^(bu - bd + 1)); aim for 24 bits.
+    int s = 24 - (bu - bd);
+    for (;;) {
+        uint64_t num = s >= 0 ? u << s : u;
+        uint64_t den = s >= 0 ? d : d << -s;
+        uint64_t q   = num / den;
+        if (q >= ((uint64_t)1 << 24)) {
+            s--;
+            continue;
+        }
+        if (q < ((uint64_t)1 << 23)) {
+            s++;
+            continue;
+        }
+        uint64_t r = num - q * den;
+        q += r > den - r || (r == den - r && (q & 1u));
+        *m  = q; // may be 2^24, still exact in float32
+        *sh = s;
+        return;
+    }
+}
+
+// Rounds u / 2^sh (u < 2^63) to 24 significant bits, ties to even, as
+// m / 2^s. Shifts only, so any sh is safe; a u of 24 bits or fewer is exact
+// and is returned unchanged.
+static void f32_pow2(uint64_t u, int sh, uint64_t *m, int *s) {
+    int n = 0;
+    while ((u >> n) >= ((uint64_t)1 << 24)) {
+        n++;
+    }
+    if (n > 0) {
+        uint64_t q = u >> n, r = u & (((uint64_t)1 << n) - 1u);
+        uint64_t half = (uint64_t)1 << (n - 1);
+        q += r > half || (r == half && (q & 1u));
+        u = q;
+    }
+    *m = u;
+    *s = sh - n;
+}
+
+// round(m / 2^sh * 2048), ties to even, for 0 <= m / 2^sh <= 1.
+static uint16_t q11_round(uint64_t m, int sh) {
+    int k = sh - 11; // m * 2048 / 2^sh = m / 2^k
+    if (k <= 0) {
+        return (uint16_t)(m << -k);
+    }
+    if (k >= 63) {
+        return 0;
+    }
+    uint64_t q = m >> k, r = m & (((uint64_t)1 << k) - 1u);
+    uint64_t half = (uint64_t)1 << (k - 1);
+    q += r > half || (r == half && (q & 1u));
+    return (uint16_t)q;
+}
+
+// Weights from the fractional part f = F / 2^sh, 0 <= f < 1, which is
+// already a float32 value: a1 = round(f * 2048), a0 = round(float32(1 - f) *
+// 2048).
+static struct LinearWeights q11_weights(uint64_t F, int sh) {
+    struct LinearWeights w;
+    if (F == 0) {
+        w.a0 = LINEAR_ONE;
+        w.a1 = 0;
+        return w;
+    }
+    w.a1 = q11_round(F, sh);
+    // A nonzero position is at least 1 / (2 dw) >= 2^-32, so sh <= 56 and
+    // 2^sh fits 64 bits.
+    uint64_t one = (uint64_t)1 << sh;
+    uint64_t m;
+    int      s;
+    f32_pow2(one - F, sh, &m, &s);
+    w.a0 = q11_round(m, s);
+    return w;
+}
+
+// Source index i and the weights of pixels i and i + 1 for destination index
+// dx. INTER_LINEAR follows OpenCV's float32 position (above). INTER_AREA when
+// upscaling uses OpenCV's area mapping: i = floor(dx sw / dw), and pixel i + 1
+// gets the part of destination cell dx past source cell i,
+// max(0, (dx + 1) sw - (i + 1) dw) / sw, rounded half to even in Q11 (OpenCV
+// rounds that fraction to float32 first, which moves a weight by one unit
+// only at sizes around 10000 and more). With
+// clamp (the x axis), a position left of pixel 0 or at or past pixel sw - 1
+// takes that edge pixel with weight 0. Without clamp (the y axis, as in
+// OpenCV), i may be -1 or sw - 1 and the caller clamps the two row indices.
+static void linear_coord(int dx, int sw, int dw, int area, int clamp, int *x0,
+                         struct LinearWeights *w) {
+    int64_t i;
+    if (area) {
+        i           = (int64_t)dx * sw / dw;
+        int64_t num = ((int64_t)dx + 1) * sw - (i + 1) * dw;
+        int64_t f   = 0;
+        if (num > 0) {
+            int64_t r = num * LINEAR_ONE;
+            f         = r / sw;
+            int64_t m = r - f * sw;
+            f += 2 * m > sw || (2 * m == sw && (f & 1));
+        }
+        w->a1 = (uint16_t)f;
+        w->a0 = (uint16_t)(LINEAR_ONE - f);
+    } else {
+        int64_t  n = (2 * (int64_t)dx + 1) * sw - dw;
+        uint64_t m;
+        int      sh;
+        f32_ratio((uint64_t)(n < 0 ? -n : n), 2 * (uint64_t)dw, &m, &sh);
+        if (sh <= 0) { // |fx| >= 2^23: a whole number
+            i  = (int64_t)(m << -sh) * (n < 0 ? -1 : 1);
+            *w = q11_weights(0, 0);
+        } else if (n >= 0) {
+            i  = (int64_t)(m >> sh);
+            *w = q11_weights(m - ((uint64_t)i << sh), sh);
+        } else {
+            // -1/2 < fx < 0 here, since -dw < n < 0: floor is -1, and the
+            // fraction fx + 1 is rounded to float32 again. When |fx| <=
+            // 2^-25 (only for dw > 2^24) it rounds to 1.0, which gives
+            // i = -1 with weights (0, 2048), as in OpenCV.
+            uint64_t fm;
+            int      fs;
+            f32_pow2(((uint64_t)1 << sh) - m, sh, &fm, &fs);
+            i  = -1;
+            *w = q11_weights(fm, fs);
         }
     }
+    // Without clamp the caller clamps both row indices to sw - 1, so an index
+    // past it reads the same rows; above 2^24 rows float32 positions can land
+    // there (as in OpenCV), and the index must also fit an int.
+    if (!clamp && i > sw - 1) {
+        i = sw - 1;
+    }
+    if (clamp && (i < 0 || i >= sw - 1)) {
+        i  = i < 0 ? 0 : sw - 1;
+        *w = q11_weights(0, 0);
+    }
     *x0 = (int)i;
-    *fx = (uint16_t)f;
+}
+
+void improc_resize_coord(int dx, int sw, int dw, int area, int clamp, int *x0,
+                         uint16_t *a0, uint16_t *a1) {
+    struct LinearWeights w;
+    linear_coord(dx, sw, dw, area, clamp, x0, &w);
+    *a0 = w.a0;
+    *a1 = w.a1;
 }
 
 // Largest source pixel count INTER_AREA accepts: 255 * 2^24 < 2^32.
@@ -157,7 +322,10 @@ static void resize_area(struct Mat *dst, const struct Mat *src) {
     uint32_t *hrow = bufs;
     uint32_t *acc  = bufs + n;
     uint32_t  den  = (uint32_t)sw * (uint32_t)sh;
-    uint32_t  half = den / 2u;
+    // OpenCV rounds the mean half to even (cvRound of a float), except an
+    // exact 2x2 reduction, whose vector path adds 2 and shifts.
+    int half_even = !((int32_t)sw == 2 * (int32_t)dw &&
+                      (int32_t)sh == 2 * (int32_t)dh);
 
     uint64_t src_h  = (uint64_t)sh;
     uint64_t dst_h  = (uint64_t)dh;
@@ -187,7 +355,14 @@ static void resize_area(struct Mat *dst, const struct Mat *src) {
         }
         uchar *d = mat_row(dst, y);
         for (size_t i = 0; i < n; i++) {
-            d[i] = (uchar)((acc[i] + half) / den);
+            uint32_t q = acc[i] / den;
+            uint32_t r = acc[i] - q * den;
+            if (half_even) {
+                q += r > den - r || (r == den - r && (q & 1u));
+            } else {
+                q += r >= den - r;
+            }
+            d[i] = (uchar)q;
         }
     }
     fast_free(bufs);
@@ -206,7 +381,10 @@ void resize(struct Mat *dst, const struct Mat *src, int interpolation) {
     }
     ASSERT(src->rows > 0 && src->cols > 0);
 
-    if (interpolation == INTER_AREA) {
+    // OpenCV averages areas only when neither axis grows; otherwise
+    // INTER_AREA runs the linear kernel with the area mapping.
+    int area = interpolation == INTER_AREA;
+    if (area && dst->cols <= src->cols && dst->rows <= src->rows) {
         resize_area(dst, src);
         return;
     }
@@ -214,11 +392,15 @@ void resize(struct Mat *dst, const struct Mat *src, int interpolation) {
     int dw = dst->cols, dh = dst->rows, sw = src->cols, sh = src->rows;
     int cn = (int)mat_channel_num(src);
 
-    // Scratch: coordinate tables 2*dw*sizeof(int) + dw*2, overflow checked.
-    int *xs = fast_malloc(
-        improc_scratch_mul(improc_scratch_mul(2, (size_t)dw), sizeof(int)));
-    uint16_t *fxs =
-        fast_malloc(improc_scratch_mul((size_t)dw, sizeof(uint16_t)));
+    // Scratch: coordinate tables 2*dw*sizeof(int) + dw*4, overflow checked.
+    // Both sizes are computed before the first allocation, so an overflow
+    // ASSERT cannot leave a block behind.
+    const size_t xs_bytes =
+        improc_scratch_mul(improc_scratch_mul(2, (size_t)dw), sizeof(int));
+    const size_t w_bytes =
+        improc_scratch_mul((size_t)dw, sizeof(struct LinearWeights));
+    int                  *xs  = fast_malloc(xs_bytes);
+    struct LinearWeights *fxs = fast_malloc(w_bytes);
     improc_scratch_check((void *const[]){xs, fxs}, 2);
     int *x0 = xs, *x1 = xs + dw;
 
@@ -234,14 +416,15 @@ void resize(struct Mat *dst, const struct Mat *src, int interpolation) {
         }
     } else {
         for (int x = 0; x < dw; x++) {
-            linear_coord(x, sw, dw, &x0[x], &fxs[x]);
+            linear_coord(x, sw, dw, area, 1, &x0[x], &fxs[x]);
             x1[x] = x0[x] + 1 < sw ? x0[x] + 1 : sw - 1;
         }
         for (int y = 0; y < dh; y++) {
-            int      y0;
-            uint16_t fy;
-            linear_coord(y, sh, dh, &y0, &fy);
+            int                  y0;
+            struct LinearWeights fy;
+            linear_coord(y, sh, dh, area, 0, &y0, &fy);
             int y1 = y0 + 1 < sh ? y0 + 1 : sh - 1;
+            y0     = y0 < 0 ? 0 : y0;
             resize_linear_row(mat_row(src, y0), mat_row(src, y1),
                               mat_row(dst, y), dw, cn, x0, x1, fxs, fy);
         }
