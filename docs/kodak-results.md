@@ -5,17 +5,17 @@
 ## 做法
 
 1. 每個模組各有一支 `test_kodak_<module>`。它對 24 張影像各跑一遍運算，計算輸出的 FNV-1a 雜湊，與 `tests/golden/kodak_<module>.txt` 比對。同一份雜湊清單在 Windows（LLVM-MinGW）、WSL（GCC x86-64）與 `qemu-aarch64` 下都通過，所以各平台的輸出逐 byte 相同。
-2. 加上 `--dump <目錄>` 時，測試把每個輸出存成 `<影像>_<運算>.png`。十個模組倒進同一個目錄。
+2. 加上 `--dump <目錄>` 時，測試把每個輸出存成 `<影像>_<運算>.png`。十一個模組倒進同一個目錄。
 3. `tools/compare_opencv.py --dump <目錄>` 讀入這些 PNG。每個運算用我們自己輸出的輸入餵給 OpenCV（例如 `cv2.Sobel` 的輸入是我們輸出的灰階圖），所以某一步的差異不會傳到下一步。最大差異超過容許誤差就以非零狀態結束。
 
 ```sh
-for m in phase1 morph hist color2 camera area edge median features f32; do
+for m in phase1 morph hist color2 camera area edge median features draw f32; do
   build/test_kodak_$m --dir datasets/kodak --manifest tests/golden/kodak_$m.txt --dump dump
 done
 python3 tools/compare_opencv.py --dump dump
 ```
 
-`f32`（`CV_8U` 轉 `CV_32F` 再轉回的恆等性）沒有對應的 OpenCV 運算，只驗證雜湊，不在比對表內。
+`f32`（`CV_8U` 轉 `CV_32F` 再轉回的恆等性）沒有對應的 OpenCV 運算，只驗證雜湊，不在比對表內。`draw_text` 也一樣：`cv2.putText` 用向量字型，與本專案的點陣字型無從比較，所以只驗證雜湊。
 
 ## 結果
 
@@ -69,13 +69,17 @@ OpenCV 4.10.0，24 張影像，51 個運算，全部在容許誤差內。「差�
 | `motion_mask` | edge | 0 | 0 | 0 | `absdiff` 後 `THRESH_BINARY` 40 |
 | `motion_box` | edge | 0 | 0 | 0 | numpy 外框與重心（同時比對 `motion_stats`、`still_stats`） |
 | `corner_box` | edge | 0 | 0 | 0 | 角落 12×12，十字被邊界裁切（同時比對 `corner_stats`） |
+| `draw_lines` | draw | 0 | 0 | 0 | `cv2.line`，`LINE_8`，粗細 1（含超出影像與座標 ±2^24 的線） |
+| `draw_circles` | draw | 0 | 0 | 0 | `cv2.circle`，`LINE_8`，粗細 1 與實心（含半徑 2^20 的圓） |
+| `draw_thick` | draw | 0 | 0 | 0 | 本專案的粗線與圓環規則（`cv2.line` 加圓形筆刷 `cv2.dilate`、numpy 圓環），不是 OpenCV 的粗線 |
 
 ## 解讀
 
-- 逐 byte 相同（最大差異 0）的運算：色彩順序轉換、查表、濾波（box、gauss、Sobel）、翻轉、裁切、絕對差、整數倍的 nearest、中值濾波、FAST 角點偵測、形態學、直方圖等化、Otsu、RGB 轉 HSV、半倍縮小的 `INTER_AREA`。`equalize`、`half_linear`、`area_up_1_5` 的容許誤差是 1，實測也是 0。
+- 逐 byte 相同（最大差異 0）的運算：色彩順序轉換、查表、濾波（box、gauss、Sobel）、翻轉、裁切、絕對差、整數倍的 nearest、中值濾波、FAST 角點偵測、粗細 1 的畫線與畫圓、實心圓、形態學、直方圖等化、Otsu、RGB 轉 HSV、半倍縮小的 `INTER_AREA`。`equalize`、`half_linear`、`area_up_1_5` 的容許誤差是 1，實測也是 0。
 - 差 1 個階的運算都是定點捨入與 OpenCV 的捨入方式不同：灰階、`convertScaleAbs`、非整數倍的雙線性縮放、HSV 轉回 RGB、YUV、三分之一與四分之一的 `INTER_AREA`。差異都在容許範圍內，沒有放寬任何容許誤差。
 - 相機格式（camera 模組）的輸入不是真的相機畫面：測試把 Kodak 的 RGB 打包成 RGB565 或 YUYV 位元組，再交給解碼函式。`tools/opencv_ref/camera.py` 用同樣的方式打包，再交給 OpenCV。RGB565 與 YUYV 轉 RGB 和 OpenCV 逐 byte 相同；RGB565 轉灰階沿用本專案的灰階公式，所以和 OpenCV 差 1。
 - FAST 的結果是角點清單，不是影像。features 模組把角點畫成同尺寸的 `CV_8UC1` 圖：有非極大值抑制時，角點像素存分數；沒有時存 255；其餘像素為 0。`tools/opencv_ref/features.py` 用 OpenCV 的角點畫出同樣的圖，所以最大差異 0 表示角點的位置與分數都相同。
+- 畫圖（draw 模組）在原圖的副本上畫線與圓。粗細 1 的線先依 `cv2.clipLine` 的步驟裁切到影像內，再從左端點走 Bresenham，所以座標在 ±2^26 以內時與 `cv2.line` 逐位元組相同；超過時 OpenCV 用 `double` 計算裁切點，可能差一個像素，本專案用整數算出精確值。粗細 2 以上的線與圓，OpenCV 畫出的寬度約為 2⌈t/2⌉+1 像素，本專案畫剛好 t 像素寬，兩者本來就不同，所以 `draw_thick` 比對的是用 cv2 與 numpy 重寫的本專案規則。
 - 每個運算的容許誤差寫在 `tools/opencv_ref/*.py`。
 
 ## ORB 的配對品質
