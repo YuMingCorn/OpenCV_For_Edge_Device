@@ -30,8 +30,8 @@ improc 是一組用 C11 寫成的基本影像處理函式：色彩轉換、二�
 
 在微控制器上開發時，常常找不到能直接編譯上去的影像處理函式庫。OpenCV 太大，也需要作業系統。improc 提供一組小而完整的函式，目標是在受限裝置上「可重現、可驗證」：
 
-- **可重現。** 影像運算只用整數定點運算（只有選用的 `convert_to` 用單精度浮點，且不使用 FMA）。同一份 Kodak 雜湊清單在 Windows、Linux x64 與 aarch64 上都通過，輸出逐位元組相同。所以在 PC 上算出的結果，可以直接當成裝置上的期望值。
-- **適合受限裝置。** 核心只依賴 libc（開啟浮點時另加 libm），不需要檔案系統、執行緒或作業系統。暫存記憶體只與列寬和 `ksize` 有關，大小寫在文件裡。影像緩衝區可以由呼叫端提供；需要暫存的運算可以接上自己的配置器。
+- **可重現。** 影像運算只用整數定點運算（只有選用的 `convert_to` 與 SIFT 用單精度浮點，且不使用 FMA，也不呼叫結果會因 C 函式庫而異的 `expf`、`atan2f` 等函式）。同一份 Kodak 雜湊清單在 Windows、Linux x64 與 aarch64 上都通過，輸出逐位元組相同。所以在 PC 上算出的結果，可以直接當成裝置上的期望值。
+- **適合受限裝置。** 核心只依賴 libc（開啟浮點時另加 libm），不需要檔案系統、執行緒或作業系統。除了 SIFT 以外，暫存記憶體只與列寬和 `ksize` 有關，大小寫在文件裡。影像緩衝區可以由呼叫端提供；需要暫存的運算可以接上自己的配置器。
 - **可驗證。** 每個運算都有手算的小矩陣測試、與簡單參考實作的比對，以及在 24 張 Kodak 影像上與 OpenCV 的逐運算比對。
 
 適合的用途：相機模組上的前處理（灰階、模糊、二值化、縮圖）、簡單物體偵測的前置步驟，以及需要一份可當參考答案的影像處理實作。API 仍可能調整。
@@ -225,13 +225,13 @@ cmake --build build-armhf
 FLAGS="-std=c11 -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard -Os \
        -ffunction-sections -fdata-sections -ffp-contract=off -Icore \
        -DIMPROC_CORE_ONLY=1 -DIMPROC_NO_STDIO=1 -DIMPROC_HAS_FLOAT=1"
-for f in color pixel filter geometry mat utils morph hist features2d convert_f32; do
+for f in color pixel filter geometry mat utils morph hist features2d draw convert_f32; do
     arm-none-eabi-gcc $FLAGS -c core/$f.c
 done
 arm-none-eabi-ar rcs libimproc_core.a *.o
 ```
 
-沒有浮點的目標改用 `-DIMPROC_HAS_FLOAT=0`，並拿掉 `convert_f32`。各巨集的意義見 [docs/porting.md](docs/porting.md)。
+沒有浮點的目標改用 `-DIMPROC_HAS_FLOAT=0`，並拿掉 `convert_f32` 與 `sift`。各巨集的意義見 [docs/porting.md](docs/porting.md)。
 
 ### Arduino IDE 與 PlatformIO
 
@@ -412,7 +412,7 @@ void process_frame(void) {
 }
 ```
 
-`cvt_color`、`threshold`、`mat_lut`、`convert_scale`、`absdiff`、`flip`、`crop`、`calc_hist`、`otsu_threshold_hist`、`nonzero_stats` 不需要暫存記憶體。濾波（`median_blur` 只在 `ksize` 7 以上）、形態學、`resize`、`equalize_hist`、`otsu_threshold`、`fast_detect`（只在開啟非極大值抑制時）、`orb_detect` 與 `match_descriptors`（只在交叉檢查時）會向 `fast_malloc` 要一小塊暫存。沒有 malloc 時，要用 `improc_set_allocator` 提供自己的配置器，例如固定大小的記憶體池。各運算的暫存大小見 [docs/porting.md](docs/porting.md)。
+`cvt_color`、`threshold`、`mat_lut`、`convert_scale`、`absdiff`、`flip`、`crop`、`calc_hist`、`otsu_threshold_hist`、`nonzero_stats` 與畫圖函式（`draw_*`）不需要暫存記憶體。濾波（`median_blur` 只在 `ksize` 7 以上）、形態學、`resize`、`equalize_hist`、`otsu_threshold` 與 `fast_detect`（只在開啟非極大值抑制時）會向 `fast_malloc` 要一小塊暫存。沒有 malloc 時，要用 `improc_set_allocator` 提供自己的配置器，例如固定大小的記憶體池。各運算的暫存大小見 [docs/porting.md](docs/porting.md)。
 
 ### 動態偵測
 
@@ -477,12 +477,13 @@ int32_t nm = match_descriptors(m, da, na, db, nb, 1);  // 交叉檢查
 | `hist.h` | `otsu_threshold`、`otsu_threshold_hist` | Otsu 門檻；判準以精確的整數與分數比較，沒有浮點捨入造成的平手 |
 | `hist.h` | `nonzero_stats` | 二值影像的非零像素數、外接矩形與重心座標總和，用來判斷有沒有物體、在哪裡、多大 |
 | `features2d.h` | `fast_detect` | FAST-9 角點偵測（灰階），可選擇非極大值抑制；角點寫進呼叫端提供的 `struct KeyPoint` 陣列，回傳找到的總數；結果與 `cv2.FastFeatureDetector` 的位置、順序、分數都相同 |
-| `features2d.h` | `orb_detect`、`orb_compute` | ORB 特徵：FAST 角點依 FAST 分數與 Harris 量挑出前 N 個，以強度重心定方向（32 個角度，只用整數），再算 256 位元的旋轉 BRIEF 描述子；取樣點表由專案自己的種子產生器產生，所以描述子不能和 OpenCV 的 ORB 互相配對 |
-| `features2d.h` | `hamming_distance`、`match_descriptors` | 描述子的 Hamming 距離與暴力配對，可選擇交叉檢查 |
+| `draw.h` | `draw_point`、`draw_line`、`draw_circle` | 在影像上畫點、線、圓，用來標示偵測結果；超出影像的部分直接裁掉；粗細 1 的線與圓、實心圓和 `cv2.line`／`cv2.circle`（`LINE_8`）逐位元組相同 |
+| `draw.h` | `draw_text`、`draw_text_width` | 內建 5×8 點陣字型，只支援 ASCII 0x20～0x7E，可整數倍放大；其他位元組畫成方框，一個 UTF-8 字元只畫一個方框 |
 | `geometry.h` | `flip` | 水平、垂直、雙向翻轉 |
 | `geometry.h` | `crop` | 從大圖複製出一塊矩形區域（任何型別），區域大小由 dst 決定 |
 | `geometry.h` | `resize` | `INTER_NEAREST`、`INTER_LINEAR`（半像素中心）與 `INTER_AREA`（整數面積權重，放大縮小皆可） |
 | `convert_f32.h` | `convert_to` | `CV_8UCn` 與 `CV_32FCn` 互轉並套用 `alpha`、`beta`；需要 `IMPROC_ENABLE_FLOAT` |
+| `sift.h` | `sift_detect_compute`、`sift_match` | SIFT 關鍵點與 128 byte 描述子（灰階），流程與參數同 `cv2.SIFT_create`；關鍵點超過陣列容量時保留反應最強的；`sift_match` 用 L2 距離加比值檢定配對。需要 `IMPROC_ENABLE_FLOAT`，暫存見 `sift_scratch_bytes` |
 | `mat.h` | `alloc_mat`、`mat_init` | `alloc_mat` 從堆積配置；`mat_init` 包裝呼叫端的緩衝區，不配置記憶體 |
 | `mat_io.h` | `alloc_mat_from_file`、`mat_write` | 讀寫 PNG 與 JPG，依副檔名選格式（只在 `improc` 函式庫，不在 `improc_core`） |
 
@@ -505,7 +506,7 @@ ctest --test-dir build --output-on-failure
 比對腳本需要 Python 3、`opencv-python` 與 `numpy`（`pip install opencv-python numpy`）。先用各測試的 `--dump` 輸出影像，再讓腳本逐運算算出與 OpenCV 的最大差異：
 
 ```sh
-for m in phase1 morph hist color2 camera area edge median features f32; do
+for m in phase1 morph hist color2 camera area edge median features draw f32; do
   build/test_kodak_$m --dir datasets/kodak --manifest tests/golden/kodak_$m.txt --dump dump
 done
 python3 tools/compare_opencv.py --dump dump

@@ -6,7 +6,7 @@
 
 | 目標 | 內容 | 相依 |
 |---|---|---|
-| `improc_core` | 色彩（含 HSV、YUV）、像素、濾波、形態學、直方圖、幾何（含 `INTER_AREA`）、`CV_32F` 轉換（`convert_to`）、Mat、工具函式 | 只用 libc 的 `memcpy`、`abort` 等；不含 stdio、pthread、檔案 IO |
+| `improc_core` | 色彩（含 HSV、YUV）、像素、濾波、形態學、直方圖、幾何（含 `INTER_AREA`）、`CV_32F` 轉換（`convert_to`）、SIFT、Mat、工具函式 | 只用 libc 的 `memcpy`、`abort` 等；不含 stdio、pthread、檔案 IO |
 | `improc` | `improc_core` 加上圖檔讀寫（`mat_io.c`、stb） | pthread、stdio、檔案系統 |
 
 裸機目標（`CMAKE_SYSTEM_NAME` 為 `Generic`）預設只建 `improc_core`。
@@ -80,11 +80,12 @@ ESP32 請用 ESP-IDF 元件，把核心原始檔列進 `idf_component_register`�
 idf_component_register(
     SRCS core/color.c core/pixel.c core/filter.c core/geometry.c
          core/mat.c core/utils.c core/morph.c core/hist.c core/features2d.c
+         core/draw.c
          core/convert_f32.c
     INCLUDE_DIRS core)
 ```
 
-`convert_f32.c` 需要 `IMPROC_HAS_FLOAT=1`（ESP32 有單精度 FPU）。沒有 FPU 的目標請不要列入，並定義 `IMPROC_HAS_FLOAT=0`。
+`convert_f32.c` 與 `sift.c` 需要 `IMPROC_HAS_FLOAT=1`（ESP32 有單精度 FPU）。沒有 FPU 的目標請不要列入，並定義 `IMPROC_HAS_FLOAT=0`。
 
 ## 檢查腳本
 
@@ -150,6 +151,8 @@ Cortex-M0+（`-fstack-usage`）最大的五個堆疊框：
 ### AVR 的 RAM
 
 HSV 轉換用兩張 `uint32_t[256]` 的除法表（共 2 KB）。AVR 沒有 `PROGMEM` 時，`const` 表格會被連結器放進 `.data`，要佔同樣大小的 RAM 與 flash 初值；上表的 `size` 把它們算在 `text`。ATmega328P 只有 2 KB RAM，用不起 HSV。不呼叫 HSV 轉換時，加 `--gc-sections` 會把表格丟掉。
+
+`draw_text` 的點陣字型是一張 `uint8_t[96][5]` 的表（480 位元組：95 個 ASCII 字元加一個替代方框，每個字元 5 欄、每欄 1 byte）。它也是一般的 `const` 表格，在 AVR 上同樣佔 480 位元組 RAM；不呼叫 `draw_text` 時，`--gc-sections` 會把它丟掉。畫線與畫圓只用整數，裁切與開根號用 64 位元整數，AVR 上會連結 libgcc 的 64 位元除法。
 
 ## 與 OpenCV 的差異
 

@@ -65,17 +65,19 @@ set(IMPROC_CORE_SOURCES
     core/morph.c
     core/hist.c
     core/features2d.c
+    core/draw.c
     # lane-append: core sources
 )
 
 # Sources that need float support (not compiled when IMPROC_ENABLE_FLOAT=OFF).
 set(IMPROC_FLOAT_SOURCES
     core/convert_f32.c
+    core/sift.c
     # lane-append: float sources
 )
 # Float sources: no fused multiply-add (bit-identical across targets) and no
 # implicit float -> double promotion.
-set_source_files_properties(core/convert_f32.c PROPERTIES
+set_source_files_properties(core/convert_f32.c core/sift.c PROPERTIES
     COMPILE_OPTIONS "-ffp-contract=off;-Wdouble-promotion")
 
 add_library(improc_core STATIC ${IMPROC_CORE_SOURCES})
@@ -170,9 +172,14 @@ add_improc_test(test_hooks)
 add_improc_test(test_morph)
 add_improc_test(test_hist)
 add_improc_test(test_f32)
+add_improc_test(test_sift)
+# test_sift includes core/sift.c: same float flags as the library copy.
+set_source_files_properties(tests/test_sift.c PROPERTIES
+    COMPILE_OPTIONS "-ffp-contract=off")
 add_improc_test(test_scratch)
 add_improc_test(test_arduino_synthetic)
 add_improc_test(test_features)
+add_improc_test(test_draw)
 # lane-append: tests
 
 add_kodak_test(phase1)
@@ -184,8 +191,10 @@ add_kodak_test(area)
 add_kodak_test(edge)
 add_kodak_test(median)
 add_kodak_test(features)
+add_kodak_test(draw)
 if(IMPROC_ENABLE_FLOAT)
     add_kodak_test(f32)
+    add_kodak_test(sift)
 endif()
 # lane-append: kodak tests
 
