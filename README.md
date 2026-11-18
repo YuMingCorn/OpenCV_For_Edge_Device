@@ -30,8 +30,8 @@ improc 是一組用 C11 寫成的基本影像處理函式：色彩轉換、二�
 
 在微控制器上開發時，常常找不到能直接編譯上去的影像處理函式庫。OpenCV 太大，也需要作業系統。improc 提供一組小而完整的函式，目標是在受限裝置上「可重現、可驗證」：
 
-- **可重現。** 影像運算只用整數定點運算（只有選用的 `convert_to` 用單精度浮點，且不使用 FMA）。同一份 Kodak 雜湊清單在 Windows、Linux x64 與 aarch64 上都通過，輸出逐 byte 相同。所以在 PC 上算出的結果，可以直接當成裝置上的期望值。
-- **適合受限裝置。** 核心只依賴 libc（開啟浮點時另加 libm），不需要檔案系統、執行緒或作業系統。暫存記憶體只與列寬和 `ksize` 有關，大小寫在文件裡。影像緩衝區可以由呼叫端提供；需要暫存的運算可以接上自己的配置器。
+- **可重現。** 影像運算只用整數定點運算（只有選用的 `convert_to` 與 SIFT 用單精度浮點，且不使用 FMA，也不呼叫結果會因 C 函式庫而異的 `expf`、`atan2f` 等函式）。同一份 Kodak 雜湊清單在 Windows、Linux x64 與 aarch64 上都通過，輸出逐位元組相同。所以在 PC 上算出的結果，可以直接當成裝置上的期望值。
+- **適合受限裝置。** 核心只依賴 libc（開啟浮點時另加 libm），不需要檔案系統、執行緒或作業系統。除了 SIFT 以外，暫存記憶體只與列寬和 `ksize` 有關，大小寫在文件裡。影像緩衝區可以由呼叫端提供；需要暫存的運算可以接上自己的配置器。
 - **可驗證。** 每個運算都有手算的小矩陣測試、與簡單參考實作的比對，以及在 24 張 Kodak 影像上與 OpenCV 的逐運算比對。
 
 適合的用途：相機模組上的前處理（灰階、模糊、二值化、縮圖）、簡單物體偵測的前置步驟，以及需要一份可當參考答案的影像處理實作。API 仍可能調整。
@@ -231,7 +231,7 @@ done
 arm-none-eabi-ar rcs libimproc_core.a *.o
 ```
 
-沒有浮點的目標改用 `-DIMPROC_HAS_FLOAT=0`，並拿掉 `convert_f32`。各巨集的意義見 [docs/porting.md](docs/porting.md)。
+沒有浮點的目標改用 `-DIMPROC_HAS_FLOAT=0`，並拿掉 `convert_f32` 與 `sift`。各巨集的意義見 [docs/porting.md](docs/porting.md)。
 
 ### Arduino IDE 與 PlatformIO
 
@@ -481,6 +481,7 @@ int32_t nm = match_descriptors(m, da, na, db, nb, 1);  // 交叉檢查
 | `geometry.h` | `crop` | 從大圖複製出一塊矩形區域（任何型別），區域大小由 dst 決定 |
 | `geometry.h` | `resize` | `INTER_NEAREST`、`INTER_LINEAR`（半像素中心）與 `INTER_AREA`（整數面積權重，放大縮小皆可） |
 | `convert_f32.h` | `convert_to` | `CV_8UCn` 與 `CV_32FCn` 互轉並套用 `alpha`、`beta`；需要 `IMPROC_ENABLE_FLOAT` |
+| `sift.h` | `sift_detect_compute`、`sift_match` | SIFT 關鍵點與 128 byte 描述子（灰階），流程與參數同 `cv2.SIFT_create`；關鍵點超過陣列容量時保留反應最強的；`sift_match` 用 L2 距離加比值檢定配對。需要 `IMPROC_ENABLE_FLOAT`，暫存見 `sift_scratch_bytes` |
 | `mat.h` | `alloc_mat`、`mat_init` | `alloc_mat` 從堆積配置；`mat_init` 包裝呼叫端的緩衝區，不配置記憶體 |
 | `mat_io.h` | `alloc_mat_from_file`、`mat_write` | 讀寫 PNG 與 JPG，依副檔名選格式（只在 `improc` 函式庫，不在 `improc_core`） |
 

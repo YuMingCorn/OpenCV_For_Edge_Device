@@ -51,10 +51,12 @@ for entry in "${TARGETS[@]}"; do
         fi
     done
     if [ "$ok" = 1 ] && [ -n "$fma" ]; then
-        if "$objdump" -d "$dir/improc_convert_f32.o" | grep -Eq "$fma"; then
-            echo "  $name: fused multiply-add found in improc_convert_f32.o"
-            ok=0
-        fi
+        for fobj in improc_convert_f32.o improc_sift.o; do
+            if "$objdump" -d "$dir/$fobj" | grep -Eq "$fma"; then
+                echo "  $name: fused multiply-add found in $fobj"
+                ok=0
+            fi
+        done
     fi
     if [ "$ok" = 1 ]; then
         echo "  $name PASS"

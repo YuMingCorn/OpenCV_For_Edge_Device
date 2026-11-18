@@ -19,6 +19,7 @@ python3 tools/compare_opencv.py --dump dump
 
 ## 結果
 
+OpenCV 4.10.0，24 張影像，53 個運算，全部在容許誤差內。「差異像素」是所有影像的樣本中與 OpenCV 不同的比例。
 OpenCV 4.10.0，24 張影像，51 個運算，全部在容許誤差內。「差異像素」是所有影像的樣本中與 OpenCV 不同的比例。
 
 | 運算 | 模組 | 最大差異 | 容許 | 差異像素 % | 對照的 OpenCV 呼叫 |
@@ -62,7 +63,9 @@ OpenCV 4.10.0，24 張影像，51 個運算，全部在容許誤差內。「差�
 | `gray_median15` | median | 0 | 0 | 0 | `cv2.medianBlur` 15（我們的灰階） |
 | `fast` | features | 0 | 0 | 0 | `FastFeatureDetector` 9_16，門檻 20，非極大值抑制（角點位置與分數） |
 | `fast_raw` | features | 0 | 0 | 0 | `FastFeatureDetector` 9_16，門檻 20，不抑制（角點位置） |
-| `rot30` | features | 0 | 0 | 0 | 我們自己的 30° 旋轉（同時比對 ORB 的配對品質，見下節） |
+| `half` | sift | 0 | 0 | 0 | `INTER_AREA` 縮小一半（SIFT 的輸入） |
+| `sift_desc` | sift | 1 | 1 | 0.0964 | `SIFT.compute`，在我們的關鍵點上算描述子；同時檢查 `sift_kps` |
+| `rotscale` | sift | 0 | 0 | 0 | 我們自己的旋轉縮放；同時檢查 `sift_rotscale` 的配對正確率 |
 | `edge_gray` | edge | 1 | 1 | 3.6653 | `COLOR_RGB2GRAY` |
 | `crop_center` | edge | 0 | 0 | 0 | numpy 切片（中央一半） |
 | `absdiff_shift` | edge | 0 | 0 | 0 | `cv2.absdiff`（相距 6 像素的兩個畫面） |
@@ -79,7 +82,10 @@ OpenCV 4.10.0，24 張影像，51 個運算，全部在容許誤差內。「差�
 - 差 1 個階的運算都是定點捨入與 OpenCV 的捨入方式不同：灰階、`convertScaleAbs`、非整數倍的雙線性縮放、HSV 轉回 RGB、YUV、三分之一與四分之一的 `INTER_AREA`。差異都在容許範圍內，沒有放寬任何容許誤差。
 - 相機格式（camera 模組）的輸入不是真的相機畫面：測試把 Kodak 的 RGB 打包成 RGB565 或 YUYV 位元組，再交給解碼函式。`tools/opencv_ref/camera.py` 用同樣的方式打包，再交給 OpenCV。RGB565 與 YUYV 轉 RGB 和 OpenCV 逐 byte 相同；RGB565 轉灰階沿用本專案的灰階公式，所以和 OpenCV 差 1。
 - FAST 的結果是角點清單，不是影像。features 模組把角點畫成同尺寸的 `CV_8UC1` 圖：有非極大值抑制時，角點像素存分數；沒有時存 255；其餘像素為 0。`tools/opencv_ref/features.py` 用 OpenCV 的角點畫出同樣的圖，所以最大差異 0 表示角點的位置與分數都相同。
-- 畫圖（draw 模組）在原圖的副本上畫線與圓。粗細 1 的線先依 `cv2.clipLine` 的步驟裁切到影像內，再從左端點走 Bresenham，所以座標在 ±2^26 以內時與 `cv2.line` 逐位元組相同；超過時 OpenCV 用 `double` 計算裁切點，可能差一個像素，本專案用整數算出精確值。粗細 2 以上的線與圓，OpenCV 畫出的寬度約為 2⌈t/2⌉+1 像素，本專案畫剛好 t 像素寬，兩者本來就不同，所以 `draw_thick` 比對的是用 cv2 與 numpy 重寫的本專案規則。
+- SIFT 用浮點運算，但 exp、atan2、sin、cos 都是自己寫的多項式，並且關閉 FMA，所以各平台的雜湊仍然相同。這些函式和 libm 不同，所以結果和 `cv2.SIFT` 不是逐位元組相同：
+  - 關鍵點：在縮小一半的 24 張影像上，`cv2.SIFT` 的關鍵點有 99.7%～100% 能在 1 像素內找到我們的關鍵點（尺度比 0.8～1.25、角度差 10 度以內），反過來也是 99.9%～100%。數量最多差 1 個。
+  - 描述子：把我們的關鍵點交給 `cv2.SIFT.compute`，兩邊的描述子最多差 1，只有 0.0964% 的 byte 不同。
+  - 配對：把影像旋轉 30 度、縮小為 0.75 倍，用比值檢定（0.8）配對，配對點落在真正位置 3 像素內算正確。我們 5137/5528（92.9%），`cv2.SIFT` 5133/5523（92.9%）。任何一張影像的正確率比 OpenCV 低超過 5 個百分點時，參考函式判定失敗；`python3 tools/opencv_ref/sift.py --dump <目錄>` 會印出每張影像的數字。
 - 每個運算的容許誤差寫在 `tools/opencv_ref/*.py`。
 
 ## ORB 的配對品質

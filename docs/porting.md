@@ -6,7 +6,7 @@
 
 | 目標 | 內容 | 相依 |
 |---|---|---|
-| `improc_core` | 色彩（含 HSV、YUV）、像素、濾波、形態學、直方圖、幾何（含 `INTER_AREA`）、`CV_32F` 轉換（`convert_to`）、Mat、工具函式 | 只用 libc 的 `memcpy`、`abort` 等；不含 stdio、pthread、檔案 IO |
+| `improc_core` | 色彩（含 HSV、YUV）、像素、濾波、形態學、直方圖、幾何（含 `INTER_AREA`）、`CV_32F` 轉換（`convert_to`）、SIFT、Mat、工具函式 | 只用 libc 的 `memcpy`、`abort` 等；不含 stdio、pthread、檔案 IO |
 | `improc` | `improc_core` 加上圖檔讀寫（`mat_io.c`、stb） | pthread、stdio、檔案系統 |
 
 裸機目標（`CMAKE_SYSTEM_NAME` 為 `Generic`）預設只建 `improc_core`。
@@ -84,7 +84,7 @@ idf_component_register(
     INCLUDE_DIRS core)
 ```
 
-`convert_f32.c` 需要 `IMPROC_HAS_FLOAT=1`（ESP32 有單精度 FPU）。沒有 FPU 的目標請不要列入，並定義 `IMPROC_HAS_FLOAT=0`。
+`convert_f32.c` 與 `sift.c` 需要 `IMPROC_HAS_FLOAT=1`（ESP32 有單精度 FPU）。沒有 FPU 的目標請不要列入，並定義 `IMPROC_HAS_FLOAT=0`。
 
 ## 檢查腳本
 
