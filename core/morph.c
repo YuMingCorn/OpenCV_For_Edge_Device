@@ -11,12 +11,11 @@ static int is_u8_image_type(const struct Mat *m) {
     return t == (size_t)CV_8UC1 || t == (size_t)CV_8UC3 || t == (size_t)CV_8UC4;
 }
 
-// acc[i] = min/max(acc[i], row[i]) for n bytes.
 static void vminmax_row(uchar *restrict acc, const uchar *restrict row, int n,
                         int is_max) {
     int i = 0;
 #if IMPROC_SIMD
-    for (; i + 16 <= n; i += 16) {
+    for (const int nv = n & ~15; i < nv; i += 16) {
         v_u8 a = v_ld_u8(acc + i), b = v_ld_u8(row + i);
         v_st_u8(acc + i, is_max ? v_max_u8(a, b) : v_min_u8(a, b));
     }
@@ -69,7 +68,7 @@ static void hmin_cols(const uchar *restrict in, uchar *restrict out, int cols,
                       int cn, int r, int x0, int x1) {
     for (int x = x0; x < x1; x++) {
         const int lo = x - r < 0 ? 0 : x - r;
-        const int hi = (int32_t)x + r > cols - 1 ? cols - 1 : x + r;
+        const int hi = x > cols - 1 - r ? cols - 1 : x + r;
         for (int c = 0; c < cn; c++) {
             uchar m = in[(size_t)lo * (size_t)cn + (size_t)c];
             for (int i = lo + 1; i <= hi; i++) {
@@ -85,7 +84,7 @@ static void hmax_cols(const uchar *restrict in, uchar *restrict out, int cols,
                       int cn, int r, int x0, int x1) {
     for (int x = x0; x < x1; x++) {
         const int lo = x - r < 0 ? 0 : x - r;
-        const int hi = (int32_t)x + r > cols - 1 ? cols - 1 : x + r;
+        const int hi = x > cols - 1 - r ? cols - 1 : x + r;
         for (int c = 0; c < cn; c++) {
             uchar m = in[(size_t)lo * (size_t)cn + (size_t)c];
             for (int i = lo + 1; i <= hi; i++) {
@@ -116,7 +115,7 @@ static void hminmax_row(const uchar *restrict in, uchar *restrict out,
 static void morph(struct Mat *dst, const struct Mat *src, int ksize,
                   int is_dilate) {
     ASSERT(dst != NULL && src != NULL);
-    ASSERT(dst != src && dst->data != src->data);
+    ASSERT(dst != src);
     ASSERT(is_u8_image_type(src));
     ASSERT(mat_type(dst) == mat_type(src));
     ASSERT(dst->rows == src->rows && dst->cols == src->cols);
@@ -124,19 +123,19 @@ static void morph(struct Mat *dst, const struct Mat *src, int ksize,
     if (src->rows == 0 || src->cols == 0) {
         return;
     }
+    ASSERT(dst->data != src->data);
 
     const int rows = src->rows;
     const int cn   = (int)mat_channel_num(src);
     const int n    = src->cols * cn;
     const int r    = ksize / 2;
 
-    // Scratch: one row of n = cols*cn bytes, overflow checked.
     uchar *buf = fast_malloc(improc_scratch_mul((size_t)src->cols, (size_t)cn));
     improc_scratch_check((void *const[]){buf}, 1);
 
     for (int y = 0; y < rows; y++) {
         const int y0 = y - r < 0 ? 0 : y - r;
-        const int y1 = (int32_t)y + r > rows - 1 ? rows - 1 : y + r;
+        const int y1 = y > rows - 1 - r ? rows - 1 : y + r;
         for (int i = 0; i < n; i++) {
             buf[i] = mat_row(src, y0)[i];
         }
@@ -160,13 +159,18 @@ void dilate(struct Mat *dst, const struct Mat *src, int ksize) {
 static void morph_pair(struct Mat *dst, struct Mat *tmp, const struct Mat *src,
                        int ksize, int first_is_dilate) {
     ASSERT(dst != NULL && tmp != NULL && src != NULL);
-    ASSERT(tmp != src && tmp != dst && tmp->data != src->data &&
-           tmp->data != dst->data);
+    ASSERT(tmp != src && tmp != dst && dst != src);
+    ASSERT(is_u8_image_type(src));
     ASSERT(mat_type(tmp) == mat_type(src));
     ASSERT(tmp->rows == src->rows && tmp->cols == src->cols);
-    ASSERT(dst != src && dst->data != src->data);
     ASSERT(mat_type(dst) == mat_type(src));
     ASSERT(dst->rows == src->rows && dst->cols == src->cols);
+    ASSERT(ksize >= 1 && ksize <= 255 && (ksize & 1));
+    if (src->rows == 0 || src->cols == 0) {
+        return;
+    }
+    ASSERT(tmp->data != src->data && tmp->data != dst->data);
+    ASSERT(dst->data != src->data);
     morph(tmp, src, ksize, first_is_dilate);
     morph(dst, tmp, ksize, !first_is_dilate);
 }

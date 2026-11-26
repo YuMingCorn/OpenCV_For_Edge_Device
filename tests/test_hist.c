@@ -159,17 +159,24 @@ static void test_equalize_hand_uniform(void) {
 }
 
 static void test_equalize_hand_offset_levels(void) {
-    // m = 10, den = 5: lut[50] = (2 * 255 + 2) / 5, lut[200] = 255.
+    // m = 10, den = 5: scale = 255 / 5 = 51 exactly, lut[50] = 2 * 51.
     const uchar in[]  = {10, 10, 10, 50, 50, 200, 200, 200};
     const uchar out[] = {0, 0, 0, 102, 102, 255, 255, 255};
     check_equalize(2, 4, in, out);
 }
 
 static void test_equalize_hand_ramp(void) {
-    // lut[1] = (1 * 255 + 1) / 2 = 128, rounded half up.
+    // lut[1] = 1 * 127.5 = 127.5, rounded half to even: 128.
     const uchar in[]  = {0, 1, 2};
     const uchar out[] = {0, 128, 255};
     check_equalize(1, 3, in, out);
+}
+
+static void test_equalize_hand_tie_to_even(void) {
+    // den = 6, scale = 42.5: lut[1] = 42.5 rounds to 42, as cv2 gives.
+    const uchar in[]  = {0, 1, 2, 2, 2, 2, 2};
+    const uchar out[] = {0, 42, 255, 255, 255, 255, 255};
+    check_equalize(1, 7, in, out);
 }
 
 static void test_equalize_constant_is_copy(void) {
@@ -185,6 +192,27 @@ static void test_equalize_constant_is_copy(void) {
 static void test_equalize_single_pixel(void) {
     const uchar in[] = {99};
     check_equalize(1, 1, in, in);
+}
+
+// OpenCV's level in float32: scale = 255.f / den, then
+// saturate_cast<uchar>(sum * scale), which rounds half to even. volatile keeps
+// each step in float32 and stops the compiler from fusing them.
+static uchar ref_cv_level(uint32_t sum, uint32_t den) {
+    volatile float scale = 255.0f / (float)den;
+    volatile float p     = (float)sum * scale;
+    float          f     = p;
+    if (!(f > 0.0f)) {
+        return 0;
+    }
+    if (f >= 255.0f) {
+        return 255;
+    }
+    int   i = (int)f;
+    float d = f - (float)i;
+    if (d > 0.5f || (d == 0.5f && (i & 1))) {
+        i++;
+    }
+    return (uchar)i;
 }
 
 static uchar ref_equalize_level(const uint32_t hist[256], uint64_t total,
@@ -204,7 +232,44 @@ static uchar ref_equalize_level(const uint32_t hist[256], uint64_t total,
     for (int i = m + 1; i <= v; i++) {
         sum += hist[i];
     }
-    return (uchar)((sum * 255u + den / 2u) / den);
+    return ref_cv_level((uint32_t)sum, (uint32_t)den);
+}
+
+// The integer emulation against float32 for every sum of every den up to
+// 4096, then for random and extreme pairs up to 2^24.
+static void test_equalize_level_vs_float(void) {
+    long bad = 0;
+    for (uint32_t den = 1; den <= 4096; den++) {
+        for (uint32_t sum = 0; sum <= den; sum++) {
+            bad += improc_equalize_level(sum, den) != ref_cv_level(sum, den);
+        }
+    }
+    uint32_t x = 0x2545F491u;
+    for (int t = 0; t < 2000000; t++) {
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        uint32_t den = 1u + x % 16777216u;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        uint32_t sum = x % (den + 1u);
+        bad += improc_equalize_level(sum, den) != ref_cv_level(sum, den);
+        bad += improc_equalize_level(den, den) != ref_cv_level(den, den);
+        bad +=
+            improc_equalize_level(den / 2u, den) != ref_cv_level(den / 2u, den);
+    }
+    const uint32_t edge[] = {16777216u, 16777215u, 8388608u, 8388607u,
+                             255u,      510u,      6u,       3u};
+    for (size_t i = 0; i < sizeof edge / sizeof edge[0]; i++) {
+        for (uint32_t sum = 0; sum <= 4096 && sum <= edge[i]; sum++) {
+            bad += improc_equalize_level(sum, edge[i]) !=
+                   ref_cv_level(sum, edge[i]);
+            bad += improc_equalize_level(edge[i] - sum, edge[i]) !=
+                   ref_cv_level(edge[i] - sum, edge[i]);
+        }
+    }
+    CHECK_EQ_INT(bad, 0);
 }
 
 static void test_equalize_width_sweep(void) {
@@ -269,7 +334,7 @@ static void test_equalize_properties(void) {
 }
 
 static void test_equalize_large_counts(void) {
-    // 2^24 pixels: sum * 255 stays below 2^32 (sum <= 2^24 - 1).
+    // 2^24 pixels, the largest image. den = 2^24 - 1 is exact in float.
     struct Mat *src = alloc_mat(1, 16777216, CV_8UC1);
     struct Mat *dst = alloc_mat(1, 16777216, CV_8UC1);
     memset(src->data, 1, 16777216);
@@ -278,7 +343,7 @@ static void test_equalize_large_counts(void) {
     CHECK_EQ_INT(dst->data[0], 0);
     CHECK_EQ_INT(dst->data[1], 255);
     CHECK_EQ_INT(dst->data[16777215], 255);
-    // Half and half: den = 2^23, lut[200] = (2^23 * 255 + 2^22) / 2^23 = 255.
+    // Half and half: den = 2^23, lut[200] = 2^23 * (255 / 2^23) = 255.
     memset(src->data, 200, 16777216);
     memset(src->data, 3, 8388608);
     equalize_hist(dst, src);
@@ -753,8 +818,10 @@ int main(void) {
     RUN_TEST(test_equalize_hand_uniform);
     RUN_TEST(test_equalize_hand_offset_levels);
     RUN_TEST(test_equalize_hand_ramp);
+    RUN_TEST(test_equalize_hand_tie_to_even);
     RUN_TEST(test_equalize_constant_is_copy);
     RUN_TEST(test_equalize_single_pixel);
+    RUN_TEST(test_equalize_level_vs_float);
     RUN_TEST(test_equalize_width_sweep);
     RUN_TEST(test_equalize_properties);
     RUN_TEST(test_equalize_large_counts);
