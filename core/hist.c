@@ -63,15 +63,68 @@ void nonzero_stats(struct NonzeroStats *out, const struct Mat *src) {
     *out = s;
 }
 
+// Rounds q / 2^s (s >= 1) half to even.
+static uint64_t shr_half_even(uint64_t q, int s) {
+    const uint64_t half = (uint64_t)1 << (s - 1);
+    const uint64_t rem  = q & ((half << 1) - 1);
+    q >>= s;
+    return q + (rem > half || (rem == half && (q & 1)));
+}
+
+// OpenCV's float32 steps in integers, so the result is exact without an FPU:
+// scale = fl(255 / den) is m * 2^-k with a 24-bit m, the product sum * m is
+// exact and is rounded to 24 bits, and that value is rounded half to even.
+// sum, den <= 2^24, so every float32 input is exact.
+struct EqScale {
+    uint64_t m; // 2^23 <= m < 2^24
+    int      k;
+};
+
+static struct EqScale eq_scale(uint32_t den) {
+    int k = 0;
+    while (((uint64_t)255 << k) < ((uint64_t)den << 23)) {
+        k++;
+    }
+    const uint64_t num = (uint64_t)255 << k; // < 2^48
+    uint64_t       m   = num / den;
+    const uint64_t rem = num % den;
+    m += 2 * rem > den || (2 * rem == den && (m & 1));
+    if (m == (uint64_t)1 << 24) {
+        m >>= 1;
+        k--;
+    }
+    return (struct EqScale){m, k};
+}
+
+static uint8_t eq_apply(uint32_t sum, struct EqScale sc) {
+    uint64_t p = (uint64_t)sum * sc.m; // < 2^49
+    int      s = 0;
+    while ((p >> s) >= ((uint64_t)1 << 24)) {
+        s++;
+    }
+    if (s > 0) {
+        p = shr_half_even(p, s);
+    }
+    // p * 2^(s - k) is the float32 product; k - s >= 1 since it is <= 2^8.
+    const uint64_t v = shr_half_even(p, sc.k - s);
+    return (uint8_t)(v > 255 ? 255 : v);
+}
+
+uint8_t improc_equalize_level(uint32_t sum, uint32_t den) {
+    ASSERT(den >= 1 && den <= HIST_MAX_PIXELS && sum <= den);
+    return eq_apply(sum, eq_scale(den));
+}
+
 void equalize_hist(struct Mat *dst, const struct Mat *src) {
     check_u8c1(src);
     ASSERT(dst != NULL);
-    ASSERT(dst != src && dst->data != src->data);
+    ASSERT(dst != src);
     ASSERT(mat_type(dst) == (size_t)CV_8UC1);
     ASSERT(dst->rows == src->rows && dst->cols == src->cols);
     if (src->rows == 0 || src->cols == 0) {
         return;
     }
+    ASSERT(dst->data != src->data);
 
     // Scratch: histogram (1024 bytes) followed by the LUT (256 bytes).
     uint32_t *hist = fast_malloc(HIST_EQUALIZE_SCRATCH);
@@ -90,14 +143,14 @@ void equalize_hist(struct Mat *dst, const struct Mat *src) {
             lut[i] = (uchar)i;
         }
     } else {
-        uint32_t sum = 0;
+        const struct EqScale sc  = eq_scale(den);
+        uint32_t             sum = 0;
         for (int v = 0; v <= m; v++) {
             lut[v] = 0;
         }
         for (int v = m + 1; v < 256; v++) {
             sum += hist[v];
-            // sum <= 2^24 - 1, so sum * 255 + den / 2 < 2^32.
-            lut[v] = (uchar)((sum * 255u + den / 2u) / den);
+            lut[v] = eq_apply(sum, sc);
         }
     }
     mat_lut(dst, src, lut);

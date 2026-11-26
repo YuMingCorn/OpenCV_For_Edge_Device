@@ -6,18 +6,40 @@
 #include "improc_simd.h"
 #include "utils.h"
 
-static void flip_h_row(const uchar *restrict s, uchar *restrict d, int width,
-                       int cn) {
-    const uchar *p = s + (size_t)(width - 1) * (size_t)cn;
-    for (int x = 0; x < width; x++, p -= cn, d += cn) {
+// An offset, not a pointer, walks back: s - cn after the last pixel would be
+// undefined. Inlined with a constant cn the inner loop becomes plain moves.
+static inline void flip_h_cn(const uchar *restrict s, uchar *restrict d,
+                             int width, int cn) {
+    size_t off = (size_t)width * (size_t)cn;
+    for (int x = 0; x < width; x++, d += cn) {
+        off -= (size_t)cn;
         for (int c = 0; c < cn; c++) {
-            d[c] = p[c];
+            d[c] = s[off + (size_t)c];
         }
     }
 }
 
+static void flip_h_row(const uchar *restrict s, uchar *restrict d, int width,
+                       int cn) {
+    switch (cn) {
+    case 1:
+        flip_h_cn(s, d, width, 1);
+        break;
+    case 3:
+        flip_h_cn(s, d, width, 3);
+        break;
+    case 4:
+        flip_h_cn(s, d, width, 4);
+        break;
+    default:
+        flip_h_cn(s, d, width, cn);
+        break;
+    }
+}
+
 void flip(struct Mat *dst, const struct Mat *src, int flip_code) {
-    ASSERT(dst != src && dst->data != src->data);
+    ASSERT(dst != NULL && src != NULL);
+    ASSERT(dst != src);
     ASSERT(flip_code == FLIP_VERTICAL || flip_code == FLIP_HORIZONTAL ||
            flip_code == FLIP_BOTH);
     ASSERT(mat_depth(src) == CV_8U);
@@ -28,6 +50,7 @@ void flip(struct Mat *dst, const struct Mat *src, int flip_code) {
     if (src->rows == 0 || src->cols == 0) {
         return;
     }
+    ASSERT(dst->data != src->data);
     int    cn         = (int)mat_channel_num(src);
     size_t row_bytes  = (size_t)src->cols * (size_t)cn;
     int    horizontal = flip_code != FLIP_VERTICAL;
@@ -45,7 +68,7 @@ void flip(struct Mat *dst, const struct Mat *src, int flip_code) {
 
 void crop(struct Mat *dst, const struct Mat *src, int x, int y) {
     ASSERT(dst != NULL && src != NULL);
-    ASSERT(dst != src && dst->data != src->data);
+    ASSERT(dst != src);
     ASSERT(mat_type(dst) == mat_type(src));
     ASSERT(x >= 0 && y >= 0);
     // Written as subtractions so x + cols cannot overflow int.
@@ -54,6 +77,7 @@ void crop(struct Mat *dst, const struct Mat *src, int x, int y) {
     if (dst->rows == 0 || dst->cols == 0) {
         return;
     }
+    ASSERT(dst->data != src->data);
     size_t px        = mat_pixel_size(src);
     size_t row_bytes = (size_t)dst->cols * px;
     size_t offset    = (size_t)x * px;
@@ -449,7 +473,8 @@ static void resize_linear(struct Mat *dst, const struct Mat *src, int area,
 }
 
 void resize(struct Mat *dst, const struct Mat *src, int interpolation) {
-    ASSERT(dst != src && dst->data != src->data);
+    ASSERT(dst != NULL && src != NULL);
+    ASSERT(dst != src);
     ASSERT(interpolation == INTER_NEAREST || interpolation == INTER_LINEAR ||
            interpolation == INTER_AREA);
     ASSERT(mat_depth(src) == CV_8U);
@@ -459,6 +484,7 @@ void resize(struct Mat *dst, const struct Mat *src, int interpolation) {
     if (dst->rows == 0 || dst->cols == 0) {
         return;
     }
+    ASSERT(dst->data != src->data);
     ASSERT(src->rows > 0 && src->cols > 0);
 
     // OpenCV averages areas only when neither axis grows; otherwise

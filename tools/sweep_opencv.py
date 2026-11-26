@@ -53,7 +53,8 @@ class Probe:
         if img.ndim == 2:
             img = img[..., None]
         rows, cols, cn = img.shape
-        kind = "u8" if img.dtype == np.uint8 else "s16"
+        kind = {np.dtype(np.uint8): "u8", np.dtype(np.int16): "s16",
+                np.dtype(np.float32): "f32"}[img.dtype]
         src = os.path.join(self.work, "in.raw")
         dst = os.path.join(self.work, "out.raw")
         np.ascontiguousarray(img).tofile(src)
@@ -194,6 +195,50 @@ def suite_scale_abs(p):
     yield "convert_scale_abs", "all 2^16 s16 x 48 (alpha, beta)", t
 
 
+# ---- histogram and float -----------------------------------------------------
+
+
+def suite_equalize(p):
+    rng = np.random.default_rng(SEED)
+    t = Tally()
+    for i in range(300):
+        h, w = (int(v) for v in rng.integers(1, 200, 2))
+        # Few distinct levels and skewed counts give many exact ties.
+        kind = i % 3
+        if kind == 0:
+            img = rng.integers(0, 256, (h, w), dtype=np.uint8)
+        elif kind == 1:
+            img = rng.choice(rng.integers(0, 256, 4), (h, w)).astype(np.uint8)
+        else:
+            img = np.minimum(rng.geometric(0.05, (h, w)) + int(rng.integers(0, 200)), 255).astype(np.uint8)
+        t.add(p.run(img, ["equalize"]), cv2.equalizeHist(img))
+    yield "equalizeHist", "300 random images up to 199x199", t
+    t = Tally()
+    for den in range(1, 1201):
+        # Level 0 holds the minimum; the rest of the den pixels share levels
+        # 1 and 2 in every split, so every sum of every den is checked.
+        for k in range(0, den + 1, max(1, den // 40)):
+            img = np.array([[0] + [1] * k + [2] * (den - k)], np.uint8)
+            t.add(p.run(img, ["equalize"]), cv2.equalizeHist(img))
+    yield "equalizeHist", "den 1..1200, sampled sums", t
+
+
+def suite_to_u8(p):
+    # cv2.add in float32 then saturate_cast<uchar> is the convertTo rounding
+    # (cvRound, half to even). Infinities are left out: cvRound(inf) is
+    # INT_MIN on x86, which is not a rounding question.
+    k = np.arange(-2, 258, dtype=np.float32)
+    ties = k + np.float32(0.5)
+    fixed = np.array([0.49999997, -0.5, -0.49999997, 255.49998, 255.5, 1e9, -1e9], np.float32)
+    rng = np.random.default_rng(SEED)
+    x = np.concatenate([k, ties, np.nextafter(ties, np.float32(-1e9)), np.nextafter(ties, np.float32(1e9)),
+                        fixed, rng.uniform(-10, 266, 1 << 18).astype(np.float32)])
+    x = x[: x.size // 64 * 64].reshape(-1, 64)
+    t = Tally()
+    t.add(p.run(x, ["to_u8"]), cv2.add(x, np.zeros_like(x), dtype=cv2.CV_8U))
+    yield "convertTo f32->u8", "ties, neighbours, 2^18 random", t
+
+
 # ---- resize ------------------------------------------------------------------
 
 
@@ -297,6 +342,8 @@ SUITES = {
     "linear": suite_linear,
     "area": suite_area,
     "hsv": suite_hsv,
+    "equalize": suite_equalize,
+    "to_u8": suite_to_u8,
 }
 
 # Largest share of differing samples (percent) per op. An op that is not
@@ -309,6 +356,7 @@ LIMITS = {
     "RGB2YUV": 0, "BGR2YUV": 0, "YUV2RGB": 0, "YUV2BGR": 0,
     "convert_scale": 0, "convert_scale_abs": 0,
     "HSV2RGB": 0, "HSV2BGR": 0,
+    "equalizeHist": 0, "convertTo f32->u8": 0,
     "INTER_LINEAR": 1, "INTER_AREA": 1,
 }
 REPORT_ONLY = ["scalar tail"]

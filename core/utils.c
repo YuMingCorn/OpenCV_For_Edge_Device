@@ -74,7 +74,6 @@ void *fast_malloc(size_t size) {
     void *ptr = (void *)(((uintptr_t)(mem + extra)) & ~(uintptr_t)(ALIGN - 1));
     ((void **)ptr)[-1] = mem;
 
-    // Return user pointer
     return ptr;
 }
 
@@ -83,7 +82,6 @@ void fast_free(void *ptr) {
         return;
     }
     // Sneak *behind* user pointer to find address returned by the allocator
-    // Use that address to free
     free_hook(((void **)ptr)[-1]);
 }
 

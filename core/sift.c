@@ -1166,7 +1166,8 @@ static const struct SiftParams *params_or_default(const struct SiftParams *p,
 }
 
 static void check_src(const struct Mat *src) {
-    ASSERT(src != NULL && mat_type(src) == CV_8UC1 && src->data != NULL);
+    ASSERT(src != NULL && mat_type(src) == CV_8UC1);
+    ASSERT(src->data != NULL || src->rows == 0 || src->cols == 0);
 }
 
 int32_t sift_detect_compute(struct SiftKeyPoint *kps,
