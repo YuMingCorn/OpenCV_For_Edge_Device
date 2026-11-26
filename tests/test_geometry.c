@@ -169,23 +169,33 @@ static void test_resize_nearest(void) {
     resize_bytes(INTER_NEAREST, CV_8UC1, 1, 2, 1, 3, f, f_out);
 }
 
+// Widths 1..65 and heights 1..12 (up and down) for 1, 3 and 4 channels.
 static void test_resize_nearest_sweep(void) {
-    struct Mat *src = alloc_mat(1, 7, CV_8UC3);
-    fill_pattern(src, 5);
-    for (int dw = 1; dw <= 65; dw++) {
-        struct Mat *dst = alloc_mat(1, dw, CV_8UC3);
-        resize(dst, src, INTER_NEAREST);
-        for (int x = 0; x < dw; x++) {
-            int          sx = (int)(((int64_t)(2 * x + 1) * 7) / (2 * dw));
-            const uchar *p  = mat_at(src, 0, sx);
-            const uchar *q  = mat_at(dst, 0, x);
-            for (int c = 0; c < 3; c++) {
-                CHECK_EQ_INT(q[c], p[c]);
+    const int types[3] = {CV_8UC1, CV_8UC3, CV_8UC4};
+    for (int t = 0; t < 3; t++) {
+        const int   cn  = t == 0 ? 1 : t == 1 ? 3 : 4;
+        struct Mat *src = alloc_mat(5, 7, types[t]);
+        fill_pattern(src, 5 + t);
+        for (int dh = 1; dh <= 12; dh++) {
+            for (int dw = 1; dw <= 65; dw++) {
+                struct Mat *dst = alloc_mat(dh, dw, types[t]);
+                resize(dst, src, INTER_NEAREST);
+                for (int y = 0; y < dh; y++) {
+                    int sy = (int)(((int64_t)(2 * y + 1) * 5) / (2 * dh));
+                    for (int x = 0; x < dw; x++) {
+                        int sx = (int)(((int64_t)(2 * x + 1) * 7) / (2 * dw));
+                        const uchar *p = mat_at(src, sy, sx);
+                        const uchar *q = mat_at(dst, y, x);
+                        for (int c = 0; c < cn; c++) {
+                            CHECK_EQ_INT(q[c], p[c]);
+                        }
+                    }
+                }
+                free_mat(&dst);
             }
         }
-        free_mat(&dst);
+        free_mat(&src);
     }
-    free_mat(&src);
 }
 
 // ---- INTER_AREA -----------------------------------------------------------

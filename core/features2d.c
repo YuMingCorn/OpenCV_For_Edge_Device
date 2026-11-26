@@ -16,31 +16,29 @@ static const signed char fast_circle[16][2] = {
 // Returns 1 when the 16-bit circular mask holds a run of 9 set bits.
 static int has_run9(uint32_t mask) {
     uint32_t m = mask | (mask << 16); // unroll the circle once
-    uint32_t r = m;
-    for (int k = 1; k < 9; k++) {
-        r &= m >> k;
-    }
+    uint32_t r = m & (m >> 1);        // bit i: run of 2 from i
+    r &= r >> 2;                      // run of 4
+    r &= r >> 4;                      // run of 8
+    r &= m >> 8;                      // run of 9
     return (r & 0xFFFFu) != 0;
 }
 
-// Reads the 16 circle differences v - p around (x, y). The caller keeps
-// 3 <= x <= cols - 4 and 3 <= y <= rows - 4, so every read is inside src.
-static void circle_diff(int d[16], const struct Mat *src, int x, int y) {
-    const int p = mat_row(src, y)[x];
+// Byte offsets of the 16 circle pixels from the centre, for row stride step.
+static void circle_offsets(ptrdiff_t off[16], size_t step) {
     for (int k = 0; k < 16; k++) {
-        d[k] =
-            (int)mat_row(src, y + fast_circle[k][1])[x + fast_circle[k][0]] - p;
+        off[k] =
+            (ptrdiff_t)fast_circle[k][1] * (ptrdiff_t)step + fast_circle[k][0];
     }
 }
 
-// Returns 1 when (x, y) is a FAST-9 corner for threshold t, and fills d.
-static int is_corner(int d[16], const struct Mat *src, int x, int y, int t) {
-    const int    p   = mat_row(src, y)[x];
-    const uchar *up  = mat_row(src, y - 3);
-    const uchar *dn  = mat_row(src, y + 3);
-    const uchar *mid = mat_row(src, y);
+// Returns 1 when the pixel at c is a FAST-9 corner for threshold t, and fills
+// d with the 16 circle differences v - p. The caller keeps c at least 3 pixels
+// inside src, so every read is inside it.
+static int is_corner(int d[16], const uchar *c0, const ptrdiff_t off[16],
+                     int t) {
+    const int p = *c0;
     // Any 9-pixel arc covers at least 2 of the 4 compass pixels (0, 4, 8, 12).
-    const int c[4]   = {dn[x], mid[x + 3], up[x], mid[x - 3]};
+    const int c[4]   = {c0[off[0]], c0[off[4]], c0[off[8]], c0[off[12]]};
     int       bright = 0;
     int       dark   = 0;
     for (int k = 0; k < 4; k++) {
@@ -50,7 +48,9 @@ static int is_corner(int d[16], const struct Mat *src, int x, int y, int t) {
     if (bright < 2 && dark < 2) {
         return 0;
     }
-    circle_diff(d, src, x, y);
+    for (int k = 0; k < 16; k++) {
+        d[k] = (int)c0[off[k]] - p;
+    }
     uint32_t bmask = 0;
     uint32_t dmask = 0;
     for (int k = 0; k < 16; k++) {
@@ -62,18 +62,27 @@ static int is_corner(int d[16], const struct Mat *src, int x, int y, int t) {
 
 // Largest threshold that still makes the point a corner: one less than the
 // weakest pixel of the best arc of 9, over both polarities.
+// Window min and max double in length: 2, 4, 8, then 9 with one more pixel.
 static int corner_score(const int d[16]) {
+    int lo[24], hi[24];
+    for (int i = 0; i < 23; i++) { // windows of 2 over the unrolled circle
+        const int a = d[i & 15], b = d[(i + 1) & 15];
+        lo[i] = a < b ? a : b;
+        hi[i] = a > b ? a : b;
+    }
+    for (int w = 2; w <= 4; w *= 2) { // windows of 4, then 8
+        for (int i = 0; i + w < 23; i++) {
+            lo[i] = lo[i + w] < lo[i] ? lo[i + w] : lo[i];
+            hi[i] = hi[i + w] > hi[i] ? hi[i + w] : hi[i];
+        }
+    }
     int best = 0;
     for (int s = 0; s < 16; s++) {
-        int lo = 255;
-        int hi = -255;
-        for (int k = 0; k < 9; k++) {
-            const int v = d[(s + k) & 15];
-            lo          = v < lo ? v : lo;
-            hi          = v > hi ? v : hi;
-        }
-        best = lo > best ? lo : best;
-        best = -hi > best ? -hi : best;
+        const int v = d[(s + 8) & 15];
+        const int l = v < lo[s] ? v : lo[s];
+        const int h = v > hi[s] ? v : hi[s];
+        best        = l > best ? l : best;
+        best        = -h > best ? -h : best;
     }
     return best - 1;
 }
@@ -108,12 +117,15 @@ int32_t fast_detect(struct KeyPoint *kps, int32_t capacity,
     ASSERT(src->data != NULL);
     const int x_end = src->cols - 3; // exclusive
     const int y_end = src->rows - 3; // exclusive
-    int       d[16];
 
     if (!nonmax) {
+        int       d[16];
+        ptrdiff_t off[16];
+        circle_offsets(off, src->step[0]);
         for (int y = 3; y < y_end; y++) {
+            const uchar *row = mat_row(src, y);
             for (int x = 3; x < x_end; x++) {
-                if (is_corner(d, src, x, y, threshold)) {
+                if (is_corner(d, row + x, off, threshold)) {
                     emit(kps, capacity, &total, x, y, 0);
                 }
             }
@@ -143,6 +155,8 @@ static int32_t fast_nonmax(struct KeyPoint *kps, int32_t capacity,
     const size_t cols  = (size_t)src->cols;
     int32_t      total = 0;
     int          d[16];
+    ptrdiff_t    off[16];
+    circle_offsets(off, src->step[0]);
 
     // Ring of 3 score rows; row y lives in slot y % 3. A score of 0 means
     // "not a corner"; a real corner of score 0 can never beat its neighbours
@@ -154,8 +168,9 @@ static int32_t fast_nonmax(struct KeyPoint *kps, int32_t capacity,
         uchar *cur = ring + (size_t)(y % 3) * cols;
         memset(cur, 0, cols);
         if (y < y_end) {
+            const uchar *row = mat_row(src, y);
             for (int x = 3; x < x_end; x++) {
-                if (is_corner(d, src, x, y, threshold)) {
+                if (is_corner(d, row + x, off, threshold)) {
                     cur[x] = (uchar)corner_score(d);
                 }
             }
