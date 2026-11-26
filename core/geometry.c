@@ -88,10 +88,20 @@ void crop(struct Mat *dst, const struct Mat *src, int x, int y) {
 
 static void resize_nearest_row(const uchar *restrict s, uchar *restrict d,
                                int dst_w, int cn, const int *sx) {
-    for (int x = 0; x < dst_w; x++, d += cn) {
-        const uchar *p = s + (size_t)sx[x] * (size_t)cn;
-        for (int c = 0; c < cn; c++) {
-            d[c] = p[c];
+    if (cn == 1) {
+        for (int x = 0; x < dst_w; x++) {
+            d[x] = s[sx[x]];
+        }
+    } else if (cn == 3) {
+        for (int x = 0; x < dst_w; x++, d += 3) {
+            const uchar *p = s + (size_t)sx[x] * 3u;
+            d[0]           = p[0];
+            d[1]           = p[1];
+            d[2]           = p[2];
+        }
+    } else {
+        for (int x = 0; x < dst_w; x++, d += cn) {
+            memcpy(d, s + (size_t)sx[x] * (size_t)cn, (size_t)cn);
         }
     }
 }
@@ -525,10 +535,18 @@ void resize(struct Mat *dst, const struct Mat *src, int interpolation) {
             x0[x] =
                 (int)(((int64_t)(2 * (int64_t)x + 1) * sw) / (2 * (int64_t)dw));
         }
+        const size_t row_bytes = (size_t)dw * (size_t)cn;
+        int          prev      = -1;
         for (int y = 0; y < dh; y++) {
             int sy =
                 (int)(((int64_t)(2 * (int64_t)y + 1) * sh) / (2 * (int64_t)dh));
-            resize_nearest_row(mat_row(src, sy), mat_row(dst, y), dw, cn, x0);
+            if (sy == prev) { // upscaling repeats a source row
+                memcpy(mat_row(dst, y), mat_row(dst, y - 1), row_bytes);
+            } else {
+                resize_nearest_row(mat_row(src, sy), mat_row(dst, y), dw, cn,
+                                   x0);
+            }
+            prev = sy;
         }
     } else {
         resize_linear(dst, src, area, x0, x1, fxs, hbuf);

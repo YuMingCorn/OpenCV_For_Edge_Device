@@ -240,6 +240,19 @@ static inline void rgb2hsv_px(int32_t r, int32_t g, int32_t b, uchar *d) {
     d[2] = (uchar)v;
 }
 
+// R, G, B of each hue sector as indices into {V, P, Q or T}. A table instead
+// of a switch: the sector changes from pixel to pixel.
+static const uchar hsv_perm[6][3] = {{0, 2, 1}, {2, 0, 1}, {1, 0, 2},
+                                     {1, 2, 0}, {2, 1, 0}, {0, 1, 2}};
+
+static inline void hsv_store(const uchar o[3], uint32_t sec, int swap,
+                             uchar *d) {
+    const uchar *m  = hsv_perm[sec];
+    d[swap ? 2 : 0] = o[m[0]];
+    d[1]            = o[m[1]];
+    d[swap ? 0 : 2] = o[m[2]];
+}
+
 #if IMPROC_HSV_FLOAT
 // 1 - a * b rounded once to float32, for 0 <= a * b <= 1, without an FMA
 // instruction: a * b is exact in double (24 + 24 bits), and TwoSum gives the
@@ -276,34 +289,13 @@ static inline void hsv2rgb_px(uint32_t h, uint32_t s, uint32_t v, int swap,
     float       sf  = (float)s * inv;
     float       vf  = (float)v * inv;
     uint32_t    sec = k % 6u;
-    uint32_t    p   = (uint32_t)(vf * (1.0f - sf) * 255.0f);
-    uint32_t    q   = (uint32_t)(vf * hsv_one_minus_mul(sf, f) * 255.0f);
-    uint32_t    t = (uint32_t)(vf * hsv_one_minus_mul(sf, 1.0f - f) * 255.0f);
-    v             = (uint32_t)(vf * 255.0f);
-    uint32_t r, g, b;
-    switch (sec) {
-    case 0:
-        r = v, g = t, b = p;
-        break;
-    case 1:
-        r = q, g = v, b = p;
-        break;
-    case 2:
-        r = p, g = v, b = t;
-        break;
-    case 3:
-        r = p, g = q, b = v;
-        break;
-    case 4:
-        r = t, g = p, b = v;
-        break;
-    default:
-        r = v, g = p, b = q;
-        break;
-    }
-    d[swap ? 2 : 0] = (uchar)r;
-    d[1]            = (uchar)g;
-    d[swap ? 0 : 2] = (uchar)b;
+    // Odd sectors use q = V (1 - S F), even ones t = V (1 - S (1 - F)).
+    float    x = (sec & 1u) ? f : 1.0f - f;
+    uchar    o[3];
+    o[0] = (uchar)(uint32_t)(vf * 255.0f);
+    o[1] = (uchar)(uint32_t)(vf * (1.0f - sf) * 255.0f);
+    o[2] = (uchar)(uint32_t)(vf * hsv_one_minus_mul(sf, x) * 255.0f);
+    hsv_store(o, sec, swap, d);
 }
 #else
 // HSV to RGB reproduces OpenCV's 8-bit vector code bit for bit, without float
@@ -384,35 +376,12 @@ static inline void hsv2rgb_px(uint32_t h, uint32_t s, uint32_t v, int swap,
     struct F32 sf  = f32_round(s * F32_INV255.m, F32_INV255.e);
     struct F32 vf  = f32_round(v * F32_INV255.m, F32_INV255.e);
     uint32_t   sec = k % 6u;
-    uint32_t   p   = f32_trunc_255(f32_mul(vf, f32_one_minus(sf)));
-    uint32_t   q   = f32_trunc_255(f32_mul(vf, f32_one_minus_mul(sf, f)));
-    uint32_t   t =
-        f32_trunc_255(f32_mul(vf, f32_one_minus_mul(sf, f32_one_minus(f))));
-    v = f32_trunc_255(vf);
-    uint32_t r, g, b;
-    switch (sec) {
-    case 0:
-        r = v, g = t, b = p;
-        break;
-    case 1:
-        r = q, g = v, b = p;
-        break;
-    case 2:
-        r = p, g = v, b = t;
-        break;
-    case 3:
-        r = p, g = q, b = v;
-        break;
-    case 4:
-        r = t, g = p, b = v;
-        break;
-    default:
-        r = v, g = p, b = q;
-        break;
-    }
-    d[swap ? 2 : 0] = (uchar)r;
-    d[1]            = (uchar)g;
-    d[swap ? 0 : 2] = (uchar)b;
+    struct F32 x   = (sec & 1u) ? f : f32_one_minus(f);
+    uchar      o[3];
+    o[0] = (uchar)f32_trunc_255(vf);
+    o[1] = (uchar)f32_trunc_255(f32_mul(vf, f32_one_minus(sf)));
+    o[2] = (uchar)f32_trunc_255(f32_mul(vf, f32_one_minus_mul(sf, x)));
+    hsv_store(o, sec, swap, d);
 }
 
 #endif // IMPROC_HSV_FLOAT

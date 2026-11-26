@@ -26,7 +26,7 @@ build-release/bench_ops datasets/kodak/kodim01.png --only gauss5
 | `gaussian_blur` 3×3 | 9.39 | 0.88 | 10.7 | 約分權重、16 位元 SIMD、`pad_row` 用 `memcpy` |
 | `gaussian_blur` 5×5 | 11.56 | 1.32 | 8.8 | 同上 |
 | `gaussian_blur` 7×7 | 14.31 | 2.76 | 5.2 | 水平 16 位元、垂直 32 位元 SIMD |
-| `cvt_color` HSV 轉 RGB | 91.8 | 10.4 | 8.8 | 64 位元主機改用硬體 float32 |
+| `cvt_color` HSV 轉 RGB | 91.8 | 4.93 | 18.6 | 64 位元主機改用硬體 float32；每個色相區只算需要的 q 或 t，用查表排列 |
 | `resize` 縮成一半（`INTER_AREA`） | 3.48 | 0.46 | 7.5 | 2×2 專用迴圈 |
 | `sobel` | 0.62 | 0.14 | 4.5 | `pad_row` 用 `memcpy` |
 | `dilate` 3×3 | 5.07 | 1.19 | 4.3 | 垂直與水平都用 SIMD min/max |
@@ -35,8 +35,10 @@ build-release/bench_ops datasets/kodak/kodim01.png --only gauss5
 | `resize` 放大 1.5 倍（`INTER_AREA`） | 11.07 | 3.36 | 3.3 | 同 `INTER_LINEAR` |
 | `resize` 放大 1.5 倍（`INTER_LINEAR`） | 10.93 | 3.58 | 3.1 | 水平和每列只算一次、垂直 SIMD |
 | `box_filter` 5×5 | 6.86 | 2.58 | 2.7 | 除法改成乘法加位移 |
+| `resize` 放大 2 倍（`INTER_NEAREST`） | 3.48 | 0.97 | 3.6 | 重複的來源列直接複製上一列輸出；1、3 通道專用迴圈 |
+| `fast_detect` | 16.4 | 10.1 | 1.6 | 圓周位移先算好、連續 9 點用位元運算判斷、分數用滑動視窗 min／max |
 
-沒有變快的：`fast_detect`（16.5）、7×7 以上的 `median_blur`（Huang 直方圖，16.5）。FAST 試過用 SIMD 先篩掉整組 16 個非候選像素，但照片裡幾乎每組都有候選，只快 3%，所以沒有保留。
+沒有變快的：7×7 以上的 `median_blur`（Huang 直方圖，16.5）。FAST 另外試過用 SIMD 先篩掉整組 16 個非候選像素，但照片裡幾乎每組都有候選，只快 3%，所以沒有保留。
 
 ## 各項做法
 
@@ -47,6 +49,8 @@ build-release/bench_ops datasets/kodak/kodim01.png --only gauss5
 - box：每個輸出除以面積改成乘以 `m = floor(2^s / 面積) + 1` 再右移 `s = 8 + 2L`（`2^L ≥ 面積`）。被除數小於 `256 × 面積 ≤ 2^(8+L)`，誤差項小於 `1/面積`，所以結果等於整數除法。ksize 1～255 的所有面積與所有可能的被除數都窮舉驗證過。
 - `pad_row`（box、高斯、Sobel 共用）：原本每個像素都做一次 reflect 101 計算，現在中間部分用 `memcpy`，只有兩端各 `r` 個像素做反射。
 - 雙線性縮放：原本每個輸出像素都重算兩列的水平和。現在每列來源的水平和只算一次，存成 `h >> 4` 的 `int16_t`（垂直步驟只讀這個值），兩個緩衝區依來源列號快取；垂直步驟用 `mulhi`，也就是 OpenCV 自己的演算法。暫存因此多了 `4 × dst_cols × cn` 位元組。
+- FAST：圓周 16 點的位址差在每次呼叫算一次，像素只用位移讀取。通過 4 點預篩的像素才讀滿 16 點。「連續 9 點比中心亮或暗」把 16 位元的遮罩接成 32 位元，再做 4 次 AND 與位移判斷，不用逐點走圓周。分數是 16 個起點各 9 點視窗的 min 與 max，先用倍增法算出長度 2、4、8 的視窗，最後再併入第 9 點。
+- 最近鄰縮放：放大時相鄰輸出列常對到同一來源列，這時直接複製上一列的輸出。
 - HSV 轉 RGB：可攜版本用整數模擬 OpenCV 的 float32 運算，每像素十幾次 64 位元捨入。在 x86-64 與 AArch64（`FLT_EVAL_METHOD == 0`）上改用硬體 float32，`1 - a·b` 的單次捨入用 double 與 TwoSum 求出，不需要 FMA 指令。兩條路徑都與 `tests/test_color.c` 的參考實作在全部 2^24 種輸入上比對。
 
 ## 輸出不變的驗證
