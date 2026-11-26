@@ -9,6 +9,7 @@ improc 是一組用 C11 寫成的基本影像處理函式：色彩轉換、二�
 ## 目錄
 
 - [這個函式庫是什麼](#這個函式庫是什麼)
+- [架構](#架構)
 - [由 AI 開發](#由-ai-開發)
 - [安裝](#安裝)
   - [支援的平台](#支援的平台)
@@ -40,8 +41,33 @@ improc 是一組用 C11 寫成的基本影像處理函式：色彩轉換、二�
 
 | 函式庫 | 內容 | 用在哪裡 |
 |---|---|---|
-| `improc_core` | 全部影像運算。不含 stdio、pthread 與檔案 IO | 微控制器、Arduino，或任何只需要運算的程式 |
+| `improc_core` | 全部影像運算。不用 pthread 與檔案 IO；stdio 只用來印 `ASSERT` 訊息，可用 `IMPROC_NO_STDIO` 拿掉 | 微控制器、Arduino，或任何只需要運算的程式 |
 | `improc` | `improc_core` 加上 PNG／JPG 讀寫（`mat_io.h`，使用 stb） | PC 與樹莓派 |
+
+## 架構
+
+```mermaid
+flowchart LR
+  subgraph core["improc_core：只依賴 libc，開啟浮點時加 libm"]
+    ops["不需浮點的運算<br/>color · pixel · filter · morph<br/>hist · geometry · features2d · draw"]
+    flt["浮點運算（IMPROC_ENABLE_FLOAT）<br/>convert_f32 · sift"]
+    base["mat · utils<br/>Mat、ASSERT、配置器"]
+    simd["improc_simd.h<br/>SSE2、NEON 或純量迴圈"]
+    ops --> base
+    flt --> base
+    ops -->|"filter · geometry · morph"| simd
+  end
+  subgraph io["improc"]
+    matio["mat_io：PNG／JPG 讀寫"] --> stb["stb_image（第三方）"]
+  end
+  io -->|"包含"| core
+  mcu["微控制器、Arduino"] --> core
+  pc["PC、樹莓派、demo、測試"] --> io
+```
+
+影像運算多半是 `op(dst, src, 參數)` 的形式：`dst` 由呼叫端配置，運算本身不保留狀態。直方圖與特徵點的結果寫進呼叫端給的陣列或用回傳值傳回，繪圖函式直接畫在傳入的影像上。程式誤用（型別或尺寸不符、參數超出範圍）與暫存記憶體配置失敗一律以 `ASSERT` 中止，可以裝 handler 接手；外部輸入錯誤（檔案不存在、格式不支援）回傳 `NULL` 或錯誤碼。
+
+各模組的相依、`struct Mat` 的記憶體配置、共同的呼叫流程，以及濾波、`resize`、SIFT 的演算法流程，見 [docs/README.md](docs/README.md)。
 
 ## 由 AI 開發
 
@@ -225,7 +251,7 @@ cmake --build build-armhf
 FLAGS="-std=c11 -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard -Os \
        -ffunction-sections -fdata-sections -ffp-contract=off -Icore \
        -DIMPROC_CORE_ONLY=1 -DIMPROC_NO_STDIO=1 -DIMPROC_HAS_FLOAT=1"
-for f in color pixel filter geometry mat utils morph hist features2d draw convert_f32; do
+for f in color pixel filter geometry mat utils morph hist features2d draw convert_f32 sift; do
     arm-none-eabi-gcc $FLAGS -c core/$f.c
 done
 arm-none-eabi-ar rcs libimproc_core.a *.o
@@ -477,6 +503,7 @@ int32_t nm = match_descriptors(m, da, na, db, nb, 1);  // 交叉檢查
 | `hist.h` | `otsu_threshold`、`otsu_threshold_hist` | Otsu 門檻；判準以精確的整數與分數比較，沒有浮點捨入造成的平手 |
 | `hist.h` | `nonzero_stats` | 二值影像的非零像素數、外接矩形與重心座標總和，用來判斷有沒有物體、在哪裡、多大 |
 | `features2d.h` | `fast_detect` | FAST-9 角點偵測（灰階），可選擇非極大值抑制；角點寫進呼叫端提供的 `struct KeyPoint` 陣列，回傳找到的總數；結果與 `cv2.FastFeatureDetector` 的位置、順序、分數都相同 |
+| `features2d.h` | `orb_detect`、`orb_compute`、`hamming_distance`、`match_descriptors` | ORB 關鍵點（單一尺度；FAST 角點依 Harris 量排序，方向量化成 32 個角度）與 256 位元描述子，用 Hamming 距離暴力配對，可交叉檢查；取樣點表由專案自己產生，所以不和 `cv2.ORB` 逐位元組比對，配對品質見 [docs/kodak-results.md](docs/kodak-results.md) |
 | `draw.h` | `draw_point`、`draw_line`、`draw_circle` | 在影像上畫點、線、圓，用來標示偵測結果；超出影像的部分直接裁掉；粗細 1 的線與圓、實心圓和 `cv2.line`／`cv2.circle`（`LINE_8`）逐位元組相同 |
 | `draw.h` | `draw_text`、`draw_text_width` | 內建 5×8 點陣字型，只支援 ASCII 0x20～0x7E，可整數倍放大；其他位元組畫成方框，一個 UTF-8 字元只畫一個方框 |
 | `geometry.h` | `flip` | 水平、垂直、雙向翻轉 |
@@ -506,7 +533,7 @@ ctest --test-dir build --output-on-failure
 比對腳本需要 Python 3、`opencv-python` 與 `numpy`（`pip install opencv-python numpy`）。先用各測試的 `--dump` 輸出影像，再讓腳本逐運算算出與 OpenCV 的最大差異：
 
 ```sh
-for m in phase1 morph hist color2 camera area edge median features draw f32; do
+for m in phase1 morph hist color2 camera area edge median features draw f32 sift; do
   build/test_kodak_$m --dir datasets/kodak --manifest tests/golden/kodak_$m.txt --dump dump
 done
 python3 tools/compare_opencv.py --dump dump

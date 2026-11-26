@@ -6,7 +6,7 @@
 
 | 目標 | 內容 | 相依 |
 |---|---|---|
-| `improc_core` | 色彩（含 HSV、YUV）、像素、濾波、形態學、直方圖、幾何（含 `INTER_AREA`）、`CV_32F` 轉換（`convert_to`）、SIFT、Mat、工具函式 | 只用 libc 的 `memcpy`、`abort` 等；不含 stdio、pthread、檔案 IO |
+| `improc_core` | 色彩（含 HSV、YUV）、像素、濾波、形態學、直方圖、幾何（含 `INTER_AREA`）、`CV_32F` 轉換（`convert_to`）、SIFT、Mat、工具函式 | 只用 libc 的 `memcpy`、`abort` 等；不含 pthread、檔案 IO；定義 `IMPROC_NO_STDIO` 時也不含 stdio |
 | `improc` | `improc_core` 加上圖檔讀寫（`mat_io.c`、stb） | pthread、stdio、檔案系統 |
 
 裸機目標（`CMAKE_SYSTEM_NAME` 為 `Generic`）預設只建 `improc_core`。
@@ -81,7 +81,7 @@ idf_component_register(
     SRCS core/color.c core/pixel.c core/filter.c core/geometry.c
          core/mat.c core/utils.c core/morph.c core/hist.c core/features2d.c
          core/draw.c
-         core/convert_f32.c
+         core/convert_f32.c core/sift.c
     INCLUDE_DIRS core)
 ```
 

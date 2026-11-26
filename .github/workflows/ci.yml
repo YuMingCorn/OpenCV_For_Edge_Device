@@ -56,6 +56,10 @@ jobs:
         if: runner.os == 'Linux'
         run: python3 tools/lint_core.py
 
+      - name: Check architecture docs (Linux)
+        if: runner.os == 'Linux'
+        run: python3 tools/check_arch_doc.py
+
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
 
