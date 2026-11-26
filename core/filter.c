@@ -152,8 +152,6 @@ void box_filter(struct Mat *dst, const struct Mat *src, int ksize) {
     const int    nslots = ksize < rows ? ksize : rows;
     const size_t un     = (size_t)n;
 
-    // Scratch: ring nslots*n*2 (nslots = min(ksize, rows)) + pad (cols+2r)*cn
-    // + sum n*4.
     const size_t ring_bytes = improc_scratch_mul(
         improc_scratch_mul((size_t)nslots, un), sizeof(uint16_t));
     const size_t pad_bytes = improc_scratch_mul(
@@ -314,7 +312,6 @@ void gaussian_blur(struct Mat *dst, const struct Mat *src, int ksize) {
     const int       nslots = ksize < rows ? ksize : rows;
     const size_t    un     = (size_t)n;
 
-    // Scratch: ring nslots*n*2 (nslots = min(ksize, rows)) + pad (cols+2r)*cn.
     const size_t ring_bytes = improc_scratch_mul(
         improc_scratch_mul((size_t)nslots, un), sizeof(uint16_t));
     const size_t pad_bytes = improc_scratch_mul(
@@ -385,7 +382,6 @@ void sobel(struct Mat *dst, const struct Mat *src, int dx, int dy) {
     const int    nslots = 3 < rows ? 3 : rows;
     const size_t uc     = (size_t)cols;
 
-    // Scratch: ring nslots*cols*2 (nslots = min(3, rows)) + pad cols+2.
     const size_t ring_bytes = improc_scratch_mul(
         improc_scratch_mul((size_t)nslots, uc), sizeof(int16_t));
     const size_t pad_bytes = improc_scratch_add(uc, 2);
@@ -412,8 +408,6 @@ void sobel(struct Mat *dst, const struct Mat *src, int dx, int dy) {
     fast_free(pad);
     fast_free(ring);
 }
-
-// ---- median_blur ------------------------------------------------------------
 
 // Largest ksize: the window holds at most 255 * 255 = 65025 values, so every
 // histogram bin fits uint16_t.
@@ -669,8 +663,7 @@ void median_blur(struct Mat *dst, const struct Mat *src, int ksize) {
     const int cn   = (int)mat_channel_num(src);
     const int r    = ksize / 2;
 
-    // Scratch: ksize <= 5 needs none (rows go in a small stack array).
-    // Otherwise ksize row pointers + a 256-bin uint16_t histogram.
+    // ksize <= 5 needs no scratch (rows go in a small stack array).
     const uchar **rp   = NULL;
     uint16_t     *hist = NULL;
     const uchar  *small_rp[5];

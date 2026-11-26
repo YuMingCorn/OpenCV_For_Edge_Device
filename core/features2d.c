@@ -178,8 +178,6 @@ static int32_t fast_nonmax(struct KeyPoint *kps, int32_t capacity,
     return total;
 }
 
-// ---- ORB --------------------------------------------------------------------
-
 // Q14 cos and sin of step * 360 / ORB_ANGLE_STEPS degrees, rounded.
 static const int16_t orb_cos_sin_q14[32][2] = {
     {16384, 0},       {16069, 3196},   {15137, 6270},   {13623, 9102},
