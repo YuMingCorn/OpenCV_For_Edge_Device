@@ -152,7 +152,6 @@ static void linear_vrow(const int16_t *restrict h0, const int16_t *restrict h1,
     }
 }
 
-// ---- float32 emulation for the INTER_LINEAR source positions -------------
 // OpenCV computes fx = (float)((dx + 0.5) * scale - 0.5) in double and float,
 // then sx = floor(fx), fx -= sx, a1 = cvRound(fx * 2048) and
 // a0 = cvRound((1.f - fx) * 2048). Here fx is the float32 nearest to the
@@ -385,7 +384,6 @@ static void resize_area(struct Mat *dst, const struct Mat *src) {
         return;
     }
 
-    // Scratch: two rows of dw*cn uint32_t = 2*dw*cn*4, overflow checked.
     size_t    n    = improc_scratch_mul((size_t)dw, (size_t)cn);
     uint32_t *bufs = fast_malloc(
         improc_scratch_mul(improc_scratch_mul(2, n), sizeof(uint32_t)));
@@ -498,8 +496,6 @@ void resize(struct Mat *dst, const struct Mat *src, int interpolation) {
     int dw = dst->cols, dh = dst->rows, sw = src->cols, sh = src->rows;
     int cn = (int)mat_channel_num(src);
 
-    // Scratch: coordinate tables 2*dw*sizeof(int) + dw*4, and for the linear
-    // kernel two rows of horizontal sums, 2*dw*cn*2 bytes; overflow checked.
     // Every size is computed before the first allocation, so an overflow
     // ASSERT cannot leave a block behind.
     const size_t xs_bytes =

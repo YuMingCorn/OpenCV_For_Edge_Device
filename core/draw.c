@@ -2,8 +2,6 @@
 
 #include "utils.h"
 
-// ---- Common helpers ---------------------------------------------------------
-
 // ASSERTs the arguments every function shares and returns the channel count.
 static int draw_channels(const struct Mat *img, const uchar *color) {
     ASSERT(img != NULL && color != NULL);
@@ -25,7 +23,6 @@ static void put_px(struct Mat *img, int x, int y, const uchar *color, int cn) {
     }
 }
 
-// Writes one pixel when (x, y) is inside the image.
 static void put_clipped(struct Mat *img, int64_t x, int64_t y,
                         const uchar *color, int cn) {
     if (x >= 0 && y >= 0 && x < img->cols && y < img->rows) {
@@ -83,8 +80,6 @@ void draw_point(struct Mat *img, int32_t x, int32_t y, const uchar color[4]) {
     const int cn = draw_channels(img, color);
     put_clipped(img, x, y, color, cn);
 }
-
-// ---- Lines ------------------------------------------------------------------
 
 // a * b / c truncated toward zero. |a| and |b| are below 2^32 and c != 0, so
 // the product of the magnitudes fits uint64_t, and so does the result.
@@ -234,8 +229,6 @@ void draw_line(struct Mat *img, int32_t x0, int32_t y0, int32_t x1, int32_t y1,
     }
 }
 
-// ---- Circles ----------------------------------------------------------------
-
 // The eight points (+-g, +-k) and (+-k, +-g) around (cx, cy).
 static void plot8(struct Mat *img, int64_t cx, int64_t cy, int64_t g, int64_t k,
                   const uchar *color, int cn) {
@@ -333,8 +326,6 @@ void draw_circle(struct Mat *img, int32_t cx, int32_t cy, int32_t radius,
                     cn);
     }
 }
-
-// ---- Text -------------------------------------------------------------------
 
 // 5x8 glyphs for 0x20..0x7E, then the replacement box. One byte per column,
 // left to right; bit k is row k (row 0 at the top). Drawn for this project as

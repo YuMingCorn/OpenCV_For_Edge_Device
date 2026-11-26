@@ -123,7 +123,7 @@ static void rgba2bgr_row(const uchar *restrict s, uchar *restrict d,
     }
 }
 
-// ---- HSV (H 0..179, S and V 0..255) ----------------------------------------
+// HSV (H 0..179, S and V 0..255)
 // RGB to HSV uses two reciprocal tables in Q12 so the row kernel has no
 // division. sdiv_table[i] = round(255 * 4096 / i) and
 // hdiv_table[i] = round(30 * 4096 / i), with entry 0 set to 0 (a zero
@@ -441,7 +441,7 @@ static void hsv2bgr_row(const uchar *restrict s, uchar *restrict d, int width) {
     }
 }
 
-// ---- YUV (OpenCV's YCrCb; U is Cb and V is Cr, both centred on 128) -------
+// YUV (OpenCV's YCrCb; U is Cb and V is Cr, both centred on 128)
 // OpenCV's Q14 integer constants. Forward: Y from the R2Y, G2Y, B2Y weights,
 // then Cr = (R - Y) * 0.713 and Cb = (B - Y) * 0.564, both from the rounded Y.
 // Inverse: R = Y + 1.403 Cr, G = Y - 0.714 Cr - 0.344 Cb, B = Y + 1.773 Cb.
@@ -502,7 +502,6 @@ static void yuv2bgr_row(const uchar *restrict s, uchar *restrict d, int width) {
     }
 }
 
-// ---- Camera formats --------------------------------------------------------
 // 565: the word t holds R in bits 15..11, G in 10..5, B in 4..0. t fits 16
 // bits; the left shift may wrap a 16-bit unsigned, which the mask discards.
 
