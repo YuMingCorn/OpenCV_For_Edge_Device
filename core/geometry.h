@@ -15,8 +15,6 @@ void flip(struct Mat *dst, const struct Mat *src, int flip_code);
 // region of interest out of a camera frame before further processing.
 void crop(struct Mat *dst, const struct Mat *src, int x, int y);
 
-// INTER_NEAREST matches OpenCV's INTER_NEAREST_EXACT (source index
-// floor((d + 0.5) * src / dst)), not its INTER_NEAREST (floor(d * src / dst)).
 enum InterpolationFlags { INTER_NEAREST, INTER_LINEAR, INTER_AREA };
 
 // Resizes src into dst (same type, CV_8UC1/3/4). The target size is the size

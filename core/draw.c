@@ -206,25 +206,20 @@ void draw_line(struct Mat *img, int32_t x0, int32_t y0, int32_t x1, int32_t y1,
         dx                = dy;
         dy                = tmp;
     }
-    // e is half the classic error dx - 2 * dy (whose parity is that of dx,
-    // so err < 0 exactly when e < 0) and stays in [-dy, dx - dy].
-    int32_t e = dx / 2 - dy;
+    int32_t err = dx - 2 * dy;
     int32_t x = ax, y = ay;
-    for (int32_t i = dx;; i--) {
+    for (int32_t i = 0; i <= dx; i++) {
         if (t == 1) {
             put_px(img, (int)x, (int)y, color, cn);
         } else {
             stamp_brush(img, x - m, y - m, t, color, cn);
         }
-        if (i == 0) {
-            break;
-        }
-        if (e < 0) {
-            e += dx - dy;
+        if (err < 0) { // diagonal step
+            err += 2 * (dx - dy);
             x += 1;
             y += sy;
-        } else {
-            e -= dy;
+        } else { // step along the major axis only
+            err -= 2 * dy;
             if (vert) {
                 y += sy;
             } else {
@@ -240,8 +235,8 @@ void draw_line(struct Mat *img, int32_t x0, int32_t y0, int32_t x1, int32_t y1,
 static void plot8(struct Mat *img, int64_t cx, int64_t cy, int64_t g, int64_t k,
                   const uchar *color, int cn) {
     for (int q = 0; q < 8; q++) {
-        const int64_t u = (q & 4) ? k : g;
-        const int64_t v = (q & 4) ? g : k;
+        const int64_t u = (q & 4) ? k : g; // column offset
+        const int64_t v = (q & 4) ? g : k; // row offset
         put_clipped(img, (q & 1) ? cx + u : cx - u, (q & 2) ? cy + v : cy - v,
                     color, cn);
     }
@@ -289,7 +284,7 @@ static void circle_rows(struct Mat *img, int64_t cx, int64_t cy,
     lo             = lo < 0 ? 0 : lo;
     hi             = hi > (int64_t)img->rows - 1 ? (int64_t)img->rows - 1 : hi;
     const int cols = img->cols;
-    for (int32_t y = (int32_t)lo; y <= (int32_t)hi; y++) {
+    for (int32_t y = (int32_t)lo; y <= (int32_t)hi; y++) { // 0 <= y < rows
         const uint64_t dy = abs_u64((int64_t)y - cy);
         const uint64_t d2 = dy * dy; // <= outer2
         const int64_t  go = (int64_t)isqrt_u64(outer2 - d2);

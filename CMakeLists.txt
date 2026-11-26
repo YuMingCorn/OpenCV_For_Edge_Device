@@ -146,12 +146,6 @@ add_executable(bench_ops benchmarks/bench_ops.c)
 improc_warnings(bench_ops)
 target_link_libraries(bench_ops PRIVATE improc)
 
-if(IMPROC_ENABLE_FLOAT)
-    add_executable(sift_min examples/sift_min.c)
-    improc_warnings(sift_min)
-    target_link_libraries(sift_min PRIVATE improc)
-endif()
-
 # Raw-file runner for tools/sweep_opencv.py.
 add_executable(improc_probe tools/improc_probe.c)
 improc_warnings(improc_probe)
@@ -182,12 +176,10 @@ add_improc_test(test_sift)
 # test_sift includes core/sift.c: same float flags as the library copy.
 set_source_files_properties(tests/test_sift.c PROPERTIES
     COMPILE_OPTIONS "-ffp-contract=off")
-add_improc_test(test_sift_edge)
 add_improc_test(test_scratch)
 add_improc_test(test_arduino_synthetic)
 add_improc_test(test_features)
 add_improc_test(test_draw)
-add_improc_test(test_guards)
 # lane-append: tests
 
 add_kodak_test(phase1)

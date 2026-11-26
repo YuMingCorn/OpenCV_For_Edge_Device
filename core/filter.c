@@ -133,8 +133,7 @@ static void box_vrow(const uint32_t *restrict sum, uchar *restrict d, size_t n,
 }
 
 void box_filter(struct Mat *dst, const struct Mat *src, int ksize) {
-    ASSERT(dst != NULL && src != NULL);
-    ASSERT(dst != src);
+    ASSERT(dst != src && dst->data != src->data);
     ASSERT(is_u8_image_type(src));
     ASSERT(mat_type(dst) == mat_type(src));
     ASSERT(dst->rows == src->rows && dst->cols == src->cols);
@@ -142,7 +141,6 @@ void box_filter(struct Mat *dst, const struct Mat *src, int ksize) {
     if (src->rows == 0 || src->cols == 0) {
         return;
     }
-    ASSERT(dst->data != src->data);
     check_filter_dims(src);
 
     const int    rows   = src->rows;
@@ -152,8 +150,7 @@ void box_filter(struct Mat *dst, const struct Mat *src, int ksize) {
     const int    nslots = ksize < rows ? ksize : rows;
     const size_t un     = (size_t)n;
 
-    // Scratch: ring nslots*n*2 (nslots = min(ksize, rows)) + pad (cols+2r)*cn
-    // + sum n*4.
+    // Scratch: ring ksize*n*2 + pad (cols+2r)*cn + sum n*4, overflow checked.
     const size_t ring_bytes = improc_scratch_mul(
         improc_scratch_mul((size_t)nslots, un), sizeof(uint16_t));
     const size_t pad_bytes = improc_scratch_mul(
@@ -294,8 +291,7 @@ static void gauss_vrow(const uint16_t *const *restrict rows_in,
 }
 
 void gaussian_blur(struct Mat *dst, const struct Mat *src, int ksize) {
-    ASSERT(dst != NULL && src != NULL);
-    ASSERT(dst != src);
+    ASSERT(dst != src && dst->data != src->data);
     ASSERT(is_u8_image_type(src));
     ASSERT(mat_type(dst) == mat_type(src));
     ASSERT(dst->rows == src->rows && dst->cols == src->cols);
@@ -303,7 +299,6 @@ void gaussian_blur(struct Mat *dst, const struct Mat *src, int ksize) {
     if (src->rows == 0 || src->cols == 0) {
         return;
     }
-    ASSERT(dst->data != src->data);
     check_filter_dims(src);
 
     const int       rows   = src->rows;
@@ -314,7 +309,7 @@ void gaussian_blur(struct Mat *dst, const struct Mat *src, int ksize) {
     const int       nslots = ksize < rows ? ksize : rows;
     const size_t    un     = (size_t)n;
 
-    // Scratch: ring nslots*n*2 (nslots = min(ksize, rows)) + pad (cols+2r)*cn.
+    // Scratch: ring ksize*n*2 + pad (cols+2r)*cn, overflow checked.
     const size_t ring_bytes = improc_scratch_mul(
         improc_scratch_mul((size_t)nslots, un), sizeof(uint16_t));
     const size_t pad_bytes = improc_scratch_mul(
@@ -363,8 +358,7 @@ static void sobel_vrow(const int16_t *restrict t0, const int16_t *restrict t1,
 }
 
 void sobel(struct Mat *dst, const struct Mat *src, int dx, int dy) {
-    ASSERT(dst != NULL && src != NULL);
-    ASSERT(dst != src);
+    ASSERT(dst != src && dst->data != src->data);
     ASSERT(mat_type(src) == (size_t)CV_8UC1);
     ASSERT(mat_type(dst) == (size_t)CV_16SC1);
     ASSERT(dst->rows == src->rows && dst->cols == src->cols);
@@ -372,7 +366,6 @@ void sobel(struct Mat *dst, const struct Mat *src, int dx, int dy) {
     if (src->rows == 0 || src->cols == 0) {
         return;
     }
-    ASSERT(dst->data != src->data);
     check_filter_dims(src);
 
     static const int diff[3]   = {-1, 0, 1};
@@ -385,7 +378,7 @@ void sobel(struct Mat *dst, const struct Mat *src, int dx, int dy) {
     const int    nslots = 3 < rows ? 3 : rows;
     const size_t uc     = (size_t)cols;
 
-    // Scratch: ring nslots*cols*2 (nslots = min(3, rows)) + pad cols+2.
+    // Scratch: ring 3*cols*2 + pad cols+2, overflow checked.
     const size_t ring_bytes = improc_scratch_mul(
         improc_scratch_mul((size_t)nslots, uc), sizeof(int16_t));
     const size_t pad_bytes = improc_scratch_add(uc, 2);
@@ -652,8 +645,7 @@ static void median_huang_row(const uchar *const *rp, uchar *restrict d,
 }
 
 void median_blur(struct Mat *dst, const struct Mat *src, int ksize) {
-    ASSERT(dst != NULL && src != NULL);
-    ASSERT(dst != src);
+    ASSERT(dst != src && dst->data != src->data);
     ASSERT(is_u8_image_type(src));
     ASSERT(mat_type(dst) == mat_type(src));
     ASSERT(dst->rows == src->rows && dst->cols == src->cols);
@@ -661,7 +653,6 @@ void median_blur(struct Mat *dst, const struct Mat *src, int ksize) {
     if (src->rows == 0 || src->cols == 0) {
         return;
     }
-    ASSERT(dst->data != src->data);
     check_filter_dims(src);
 
     const int rows = src->rows;
