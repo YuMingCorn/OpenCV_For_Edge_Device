@@ -2,13 +2,20 @@
 
 half: our gray image halved with INTER_AREA; the input of every SIFT op.
 
+Every cv2 call here runs with cv2.setUseOptimized(False): the baseline SSE
+code without FMA, whose float operation order core/sift.c follows. Our SIFT
+then matches cv2.SIFT bit for bit (cv2 4.10 on x86-64 glibc, the only one
+measured: core/sift.c ports glibc's powf, sinf and cosf). IMPROC_CV_OPTIMIZED=1 compares against cv2's
+default dispatch instead (AVX2 and FMA), with the loose checks below.
+
 sift_desc: our descriptors (one row per keypoint, in the sift_kps order)
 against cv2.SIFT.compute at our own keypoints, so the two implementations
-are compared on the same points. Our float math differs from cv2 (own exp,
-atan2, sin and cos; no FMA), so a few bytes differ by a small amount. Its
-reference also checks sift_kps: at least 95 % of the cv2.SIFT keypoints must
-have one of ours within 1 pixel (size ratio 0.8..1.25, angle within 10
-degrees), and the other way round.
+are compared on the same points. Its reference also checks sift_kps: our
+keypoints (x, y, size, angle, response) must be exactly cv2.SIFT.detect's.
+With IMPROC_CV_OPTIMIZED=1, the descriptors may differ by 1 and the keypoint
+check is: at least 95 % of the cv2.SIFT keypoints must have one of ours
+within 1 pixel (size ratio 0.8..1.25, angle within 10 degrees), and the
+other way round.
 
 rotscale: our 30-degree rotation and 0.75 scale of the half image. Its
 reference checks sift_rotscale: our correct share of ratio-test matches must
@@ -18,6 +25,8 @@ directly for the per-image tables:
 """
 
 import argparse
+import collections
+import contextlib
 import os
 import sys
 
@@ -29,6 +38,18 @@ FWD_SIN = 24576 / 65536.0  # FWD_SIN_Q16
 RATIO = 0.8
 AGREE_MIN = 0.95
 PER_IMAGE_MARGIN = 0.05
+OPTIMIZED = os.environ.get("IMPROC_CV_OPTIMIZED", "0") == "1"
+
+
+@contextlib.contextmanager
+def cv_mode():
+    """Runs cv2 in the compared mode, then restores it for the other modules."""
+    old = cv2.useOptimized()
+    cv2.setUseOptimized(OPTIMIZED)
+    try:
+        yield
+    finally:
+        cv2.setUseOptimized(old)
 
 
 def read_values(dump_dir):
@@ -73,20 +94,40 @@ def agreement(a, b):
     return hit / len(a)
 
 
+def cv_detect(half):
+    with cv_mode():
+        ref = cv2.SIFT_create().detect(half, None)
+    return np.array([[k.pt[0], k.pt[1], k.size, k.angle, k.response] for k in ref],
+                    dtype=np.float32).reshape(-1, 5)
+
+
 def check_kps(ctx):
+    """(recall, precision, ours, cv2, exact): exact is the number of our
+    keypoints that equal a cv2 keypoint in all five float32 values."""
     ours = our_kps(ctx)
-    ref = cv2.SIFT_create().detect(ctx.get("half"), None)
-    ref = np.array([[k.pt[0], k.pt[1], k.size, k.angle] for k in ref])
-    return agreement(ref, ours[:, :4]), agreement(ours[:, :4], ref), len(ours), len(ref)
+    ref = cv_detect(ctx.get("half"))
+    left = collections.Counter(r.tobytes() for r in ref)
+    exact = 0
+    for k in ours[:, :5].astype(np.float32):
+        if left[k.tobytes()] > 0:
+            left[k.tobytes()] -= 1
+            exact += 1
+    ref4 = ref[:, :4].astype(np.float64)
+    return (agreement(ref4, ours[:, :4]), agreement(ours[:, :4], ref4), len(ours),
+            len(ref), exact)
 
 
 def _sift_desc(ctx):
-    rec, prec, _, _ = check_kps(ctx)
+    rec, prec, no, nc, exact = check_kps(ctx)
+    if not OPTIMIZED and not no == nc == exact:
+        sys.exit(f"{ctx.image}: {exact} of our {no} SIFT keypoints equal one of "
+                 f"cv2's {nc}; all must")
     if rec < AGREE_MIN or prec < AGREE_MIN:
         sys.exit(f"{ctx.image}: SIFT keypoint agreement with cv2 {rec:.3f} / "
                  f"{prec:.3f} is below {AGREE_MIN}")
     kps = [to_cv(k) for k in our_kps(ctx)]
-    _, desc = cv2.SIFT_create().compute(ctx.get("half"), kps)
+    with cv_mode():
+        _, desc = cv2.SIFT_create().compute(ctx.get("half"), kps)
     return np.clip(np.rint(desc), 0, 255).astype(np.uint8)
 
 
@@ -101,8 +142,9 @@ def rs_points(pts, shape):
 def cv_rotscale(half, rot):
     """(matches, correct) of cv2.SIFT with the same ratio test."""
     sift = cv2.SIFT_create()
-    ka, da = sift.detectAndCompute(half, None)
-    kb, db = sift.detectAndCompute(rot, None)
+    with cv_mode():
+        ka, da = sift.detectAndCompute(half, None)
+        kb, db = sift.detectAndCompute(rot, None)
     if da is None or db is None or len(kb) < 2:
         return 0, 0
     good = [m[0] for m in cv2.BFMatcher(cv2.NORM_L2).knnMatch(da, db, k=2)
@@ -142,7 +184,8 @@ def _half(ctx):
 
 OPS = {
     "half": (_half, 0, "INTER_AREA, factor 2"),
-    "sift_desc": (_sift_desc, 1, "SIFT.compute at our keypoints; also checks sift_kps"),
+    "sift_desc": (_sift_desc, 1 if OPTIMIZED else 0,
+                  "SIFT.compute at our keypoints; also checks sift_kps"),
     "rotscale": (_rotscale, 0, "our warp; checks sift_rotscale against cv2.SIFT"),
 }
 
@@ -155,19 +198,20 @@ def main():
     sys.path.insert(0, os.path.join(here, ".."))
     from compare_opencv import Context, find_images
 
-    print(f"{'image':<9}{'ours':>6}{'cv2':>6}{'cv2 found':>11}{'ours found':>12}"
+    print(f"cv2 {cv2.__version__}, useOptimized={OPTIMIZED}")
+    print(f"{'image':<9}{'ours':>6}{'cv2':>6}{'exact':>7}{'cv2 found':>11}{'ours found':>12}"
           f"{'ours match':>16}{'%':>7}{'cv2 match':>16}{'%':>7}")
     tot = [0, 0, 0, 0]
     for image in find_images(args.dump):
         ctx = Context(args.dump, image)
-        rec, prec, no, nc = check_kps(ctx)
+        rec, prec, no, nc, exact = check_kps(ctx)
         r = check_rotscale(ctx)
         tot = [a + b for a, b in zip(tot, r)]
-        print(f"{image:<9}{no:>6}{nc:>6}{rec:>11.3f}{prec:>12.3f}"
+        print(f"{image:<9}{no:>6}{nc:>6}{exact:>7}{rec:>11.3f}{prec:>12.3f}"
               f"{r[1]:>8}/{r[0]:<7}{100 * share(r[1], r[0]):>6.1f}"
               f"{r[3]:>8}/{r[2]:<7}{100 * share(r[3], r[2]):>6.1f}")
     ours, ref = share(tot[1], tot[0]), share(tot[3], tot[2])
-    print(f"{'total':<9}{'':>35}{tot[1]:>8}/{tot[0]:<7}{100 * ours:>6.1f}"
+    print(f"{'total':<9}{'':>42}{tot[1]:>8}/{tot[0]:<7}{100 * ours:>6.1f}"
           f"{tot[3]:>8}/{tot[2]:<7}{100 * ref:>6.1f}")
 
 

@@ -18,7 +18,7 @@ int main(void) {
 #include "test_alloc_util.h"
 #include "test_expect_assert.h"
 
-// The private helpers (exp_f, atan2_deg, gauss_blur, ...) are tested
+// The private helpers (exp_cv, atan2_deg, gauss_blur, ...) are tested
 // directly. This copy of sift.c also provides the public functions, so the
 // library's sift.o is not linked into this test.
 #include "sift.c"
@@ -54,20 +54,42 @@ static struct Mat *texture(int rows, int cols, uint32_t seed) {
 
 // ---- Portable math ----------------------------------------------------------
 
-static void test_exp_accuracy(void) {
-    double worst = 0.0;
-    for (int i = 0; i <= 92000; i++) {
-        const float  x   = -87.0f + (float)i * 0.001f;
-        const double ref = exp((double)x);
-        const double rel = fabs((double)exp_f(x) - ref) / ref;
-        worst            = rel > worst ? rel : worst;
+// pow2_cv is glibc powf(2, y), which is not correctly rounded: the
+// 0x1.c671d6p-16 case rounds the other way from 2^y.
+static void test_pow2_cv(void) {
+    static const float y[]  = {0.0f,          0.5f,          1.0f / 3.0f,
+                               0.7654321f,    1.1666666f,    0x1.c671d6p-16f,
+                               1.999f};
+    static const float ref[] = {1.0f,          0x1.6a09e6p+0f, 0x1.428a3p+0f,
+                                0x1.b32b46p+0f, 0x1.1f59acp+1f, 0x1.00013cp+0f,
+                                0x1.ffa52cp+1f};
+    for (int i = 0; i < 7; i++) {
+        CHECK(pow2_cv(y[i]) == ref[i]);
     }
-    CHECK(worst < 3e-7);
-    CHECK(exp_f(0.0f) == 1.0f);
-    CHECK(exp_f(-88.0f) == 0.0f);
-    CHECK(exp_f(-1000.0f) == 0.0f);
+    for (int32_t i = 0; i <= 20000; i++) {
+        const float  v = (float)i * 0.0001f;
+        const double e = exp2((double)v);
+        CHECK(fabs((double)pow2_cv(v) - e) <= 1.2e-7 * e);
+    }
 }
 
+// solve3 is cv2's Cramer solve; a singular H gives 0, as cv2.
+static void test_solve3(void) {
+    const float h[3][3] = {{2.0f, 1.0f, 0.0f}, {1.0f, 3.0f, 1.0f},
+                           {0.0f, 1.0f, 4.0f}};
+    const float b[3]    = {3.0f, 5.0f, 5.0f}; // x = (1, 1, 1)
+    float       x[3];
+    solve3(h, b, x);
+    CHECK(x[0] == 1.0f && x[1] == 1.0f && x[2] == 1.0f);
+    const float hs[3][3] = {{1.0f, 2.0f, 3.0f}, {2.0f, 4.0f, 6.0f},
+                            {0.0f, 1.0f, 1.0f}};
+    x[0] = x[1] = x[2] = 7.0f;
+    solve3(hs, b, x);
+    CHECK(x[0] == 0.0f && x[1] == 0.0f && x[2] == 0.0f);
+}
+
+// atan2_deg is cv2.fastAtan2: about 0.01 degrees, and the bits of
+// cv2.phase(x, y, angleInDegrees=True) (setUseOptimized(False)).
 static void test_atan2_accuracy(void) {
     double worst = 0.0;
     for (int iy = -200; iy <= 200; iy++) {
@@ -77,7 +99,7 @@ static void test_atan2_accuracy(void) {
             }
             const float y = (float)iy * 0.37f, x = (float)ix * 0.37f;
             const float d = atan2_deg(y, x);
-            CHECK(d >= 0.0f && d < 360.0f);
+            CHECK(d >= 0.0f && d <= 360.0f);
             double ref = atan2((double)y, (double)x) * 180.0 / 3.14159265358979;
             if (ref < 0.0) {
                 ref += 360.0;
@@ -87,38 +109,73 @@ static void test_atan2_accuracy(void) {
             worst      = err > worst ? err : worst;
         }
     }
-    CHECK(worst < 1e-4);
-    CHECK(atan2_deg(0.0f, 0.0f) == 0.0f);
-    CHECK(atan2_deg(0.0f, 1.0f) == 0.0f);
-    CHECK(fabsf(atan2_deg(1.0f, 0.0f) - 90.0f) < 1e-4f);
-    CHECK(fabsf(atan2_deg(0.0f, -1.0f) - 180.0f) < 1e-4f);
-    CHECK(fabsf(atan2_deg(-1.0f, 0.0f) - 270.0f) < 1e-4f);
-    // Just below the +x axis: close to 360 but never 360 itself.
-    CHECK(atan2_deg(-1e-30f, 1.0f) < 360.0f);
+    CHECK(worst < 0.0096); // cv2.phase on this grid: 0.009552
+    static const float y[] = {4.0f, 7.0f, -1.0f, -1e-30f, 1.0f, -3.5f, 0.0f};
+    static const float x[] = {3.0f, -2.5f, 0.0f, 1.0f, 1.0f, -3.5f, 0.0f};
+    static const float cv[] = {0x1.a9171cp+5f, 0x1.b6a1c4p+6f, 0x1.0ep+8f,
+                               0x1.68p+8f,     0x1.67ec74p+5f, 0x1.c1fb1cp+7f,
+                               0.0f};
+    for (int i = 0; i < 7; i++) {
+        CHECK(atan2_deg(y[i], x[i]) == cv[i]);
+    }
 }
 
-static void test_sincos_accuracy(void) {
-    double worst = 0.0;
-    for (int i = 0; i < 720 * 16; i++) {
-        const float deg = (float)i / 16.0f;
-        float       s, c;
-        sincos_deg(deg, &s, &c);
-        const double rad = (double)deg * 3.14159265358979 / 180.0;
-        const double es  = fabs((double)s - sin(rad));
-        const double ec  = fabs((double)c - cos(rad));
-        worst            = es > worst ? es : worst;
-        worst            = ec > worst ? ec : worst;
+// exp_cv is cv::hal::exp32f: x * 64 log2 e is rounded in float, so the
+// relative error grows to about 1e-7 |x|. Also its bits.
+static void test_exp_cv(void) {
+    for (int32_t i = -40000; i <= 0; i++) {
+        const float  x   = (float)i * 0.001f;
+        const double ref = exp((double)x);
+        CHECK(fabs((double)exp_cv(x) - ref) <=
+              (2e-7 + 1e-7 * fabs((double)x)) * ref);
     }
-    CHECK(worst < 1e-6);
+    static const float x[]  = {-0.5f, -3.25f, -17.0f, -0.001f, -39.75f, 0.0f};
+    static const float cv[] = {0x1.368b3p-1f,   0x1.3da368p-5f, 0x1.639e2ep-25f,
+                               0x1.ff7cfep-1f,  0x1.928214p-58f, 1.0f};
+    for (int i = 0; i < 6; i++) {
+        CHECK(exp_cv(x[i]) == cv[i]);
+    }
+    CHECK(exp_cv(-1e30f) == 0.0f);
+}
+
+// sincos_cv is glibc sinf / cosf: within 1 ulp of sin and cos, and the
+// glibc bits on the small, fast and large reduction paths.
+static void test_sincos_cv(void) {
+    for (int32_t i = -8000; i <= 8000; i++) {
+        const float y = (float)i * 0.001f;
+        CHECK(fabs((double)sincos_cv(y, 0) - sin((double)y)) <= 1.2e-7);
+        CHECK(fabs((double)sincos_cv(y, 1) - cos((double)y)) <= 1.2e-7);
+    }
+    static const float y[] = {0.0f,       1e-5f,      0.5f,    0.7853982f,
+                              3.0f,       6.2657323f, -5.0f,   119.9f,
+                              1000.0f,    -1e20f};
+    static const float gs[] = {0.0f,           0x1.4f8b58p-17f, 0x1.eaee88p-2f,
+                               0x1.6a09e6p-1f, 0x1.210386p-3f,  -0x1.1def8cp-6f,
+                               0x1.eaf82p-1f,  0x1.fc57fep-2f,  0x1.a75cc2p-1f,
+                               -0x1.502ad2p-1f};
+    static const float gc[] = {1.0f,           1.0f,           0x1.c1528p-1f,
+                               0x1.6a09e6p-1f, -0x1.fae04cp-1f, 0x1.ffec0ap-1f,
+                               0x1.227858p-2f, 0x1.bc749ap-1f,  0x1.1ff026p-1f,
+                               0x1.822e46p-1f};
+    for (int i = 0; i < 10; i++) {
+        CHECK(sincos_cv(y[i], 0) == gs[i]);
+        CHECK(sincos_cv(y[i], 1) == gc[i]);
+    }
 }
 
 static void test_round_floor(void) {
     CHECK_EQ_INT(floor_i(2.5f), 2);
     CHECK_EQ_INT(floor_i(-2.5f), -3);
     CHECK_EQ_INT(floor_i(-3.0f), -3);
-    CHECK_EQ_INT(round_i(2.5f), 3);
+    // Half to even, as cvRound; 0.49999997f + 0.5f is 1.0f in float.
+    CHECK_EQ_INT(round_i(2.5f), 2);
     CHECK_EQ_INT(round_i(-2.5f), -2);
+    CHECK_EQ_INT(round_i(3.5f), 4);
+    CHECK_EQ_INT(round_i(-3.5f), -4);
+    CHECK_EQ_INT(round_i(0.49999997f), 0);
+    CHECK_EQ_INT(round_i(-0.49999997f), 0);
     CHECK_EQ_INT(round_i(-2.6f), -3);
+    CHECK_EQ_INT(round_i(8388609.0f), 8388609);
     CHECK(pow2_i(-126) == ldexpf(1.0f, -126));
     CHECK(pow2_i(0) == 1.0f && pow2_i(5) == 32.0f);
 }
@@ -219,14 +276,65 @@ static void test_octave_count(void) {
 static void test_layer_sigmas(void) {
     struct SiftParams p;
     sift_default_params(&p);
-    float sig[SIFT_MAX_LAYERS + 3];
+    double sig[SIFT_MAX_LAYERS + 3];
     layer_sigmas(sig, &p);
     // Layer i must reach total blur sigma * 2^(i / s).
-    double total = (double)p.sigma;
+    double total = p.sigma;
     for (int i = 1; i < p.n_octave_layers + 3; i++) {
-        total = sqrt(total * total + (double)sig[i] * (double)sig[i]);
-        const double ref = (double)p.sigma * pow(2.0, (double)i / 3.0);
-        CHECK(fabs(total - ref) < 1e-5 * ref);
+        total            = sqrt(total * total + sig[i] * sig[i]);
+        const double ref = p.sigma * pow(2.0, (double)i / 3.0);
+        CHECK(fabs(total - ref) < 1e-12 * ref);
+    }
+    // cv2 SIFT sig[1..5] (std::pow and std::sqrt in double), to 2 ulp.
+    static const double cv[5] = {1.2262734984654078, 1.5450077936447955,
+                                 1.9465878414647133, 2.4525469969308156,
+                                 3.090015587289591};
+    for (int i = 0; i < 5; i++) {
+        CHECK(fabs(sig[i + 1] - cv[i]) <= 4.5e-16 * cv[i]);
+    }
+}
+
+static void test_exp_d(void) {
+    for (int32_t i = -70000; i <= 70; i++) {
+        const double x = (double)i * 0.01 + 0.003;
+        const double e = exp(x);
+        CHECK(fabs(exp_d(x) - e) <= 3.4e-16 * e);
+    }
+    CHECK(exp_d(-800.0) == 0.0);
+    CHECK(exp_d(0.0) == 1.0);
+}
+
+// The half kernels of the default layer blurs are the bits of
+// cv2.getGaussianKernel(ksize, sig[i], CV_32F), centre first.
+static void test_kernel_cv2(void) {
+    static const float k11[] = {0x1.4d2364p-2f, 0x1.ddcdfcp-3f, 0x1.606d0ep-4f,
+                                0x1.0b5ddep-6f, 0x1.a1407ap-10f,
+                                0x1.4edfacp-14f};
+    static const float k13[] = {
+        0x1.086a76p-2f, 0x1.ace486p-3f, 0x1.c995cap-4f,  0x1.411cd4p-5f,
+        0x1.287054p-7f, 0x1.68008p-10f, 0x1.1f90cap-13f};
+    static const float k27[] = {
+        0x1.0869f6p-3f,  0x1.f5d90ep-4f, 0x1.ace3b6p-4f, 0x1.4a176ap-4f,
+        0x1.c994eep-5f,  0x1.1d9ebap-5f, 0x1.411c3ap-6f, 0x1.451d18p-7f,
+        0x1.286fc4p-8f,  0x1.e6d384p-10f, 0x1.67ffd2p-11f, 0x1.df7c2p-13f,
+        0x1.1f903ep-14f, 0x1.36a04cp-16f};
+    struct SiftParams p;
+    sift_default_params(&p);
+    double sig[SIFT_MAX_LAYERS + 3];
+    layer_sigmas(sig, &p);
+    const struct {
+        int          layer;
+        const float *ref;
+        int32_t      r;
+    } cases[] = {{1, k11, 5}, {2, k13, 6}, {5, k27, 13}};
+    float w[32];
+    for (int c = 0; c < 3; c++) {
+        const double sg = sig[cases[c].layer];
+        CHECK_EQ_INT(kernel_radius(sg), cases[c].r);
+        kernel_weights(w, cases[c].r, sg);
+        for (int32_t k = 0; k <= cases[c].r; k++) {
+            CHECK(w[k] == cases[c].ref[k]);
+        }
     }
 }
 
@@ -338,7 +446,7 @@ static void test_size_sweep(void) {
             } else {
                 const size_t r0 = (size_t)(up ? 2 * rows : rows);
                 const size_t c0 = (size_t)(up ? 2 * cols : cols);
-                CHECK_EQ_INT(bytes, (7 * r0 * c0 + 360 + 14) * sizeof(float));
+                CHECK_EQ_INT(bytes, (7 * r0 * c0 + 360 + 27) * sizeof(float));
             }
             CHECK(memcmp(k1, k2, sizeof(k1[0]) * (size_t)n1) == 0);
             CHECK(memcmp(d1, d2, SIFT_DESC_BYTES * (size_t)n1) == 0);
@@ -368,13 +476,65 @@ static void test_capacity_and_null_desc(void) {
         CHECK(!(a->x == b->x && a->y == b->y && a->size == b->size &&
                 a->angle == b->angle)); // copies dropped
     }
-    const int32_t k = n / 3;
-    CHECK_EQ_INT(sift_detect_compute(part, dp, k, img, NULL), k);
-    CHECK(memcmp(part, full, sizeof(full[0]) * (size_t)k) == 0);
-    CHECK(memcmp(dp, df, SIFT_DESC_BYTES * (size_t)k) == 0);
+    // Copies are dropped before the cut, so every capacity k gives exactly
+    // the first k keypoints of the full result.
+    for (int32_t k = 1; k < n; k += k < 40 ? 1 : 7) {
+        CHECK_EQ_INT(sift_detect_compute(part, dp, k, img, NULL), k);
+        CHECK(memcmp(part, full, sizeof(full[0]) * (size_t)k) == 0);
+        CHECK(memcmp(dp, df, SIFT_DESC_BYTES * (size_t)k) == 0);
+    }
     CHECK_EQ_INT(sift_detect_compute(nodesc, NULL, CAP, img, NULL), n);
     CHECK(memcmp(nodesc, full, sizeof(full[0]) * (size_t)n) == 0);
     CHECK_EQ_INT(sift_detect_compute(NULL, NULL, 0, img, NULL), 0);
+    free_mat(&img);
+}
+
+// This texture has two start pixels that refine to the same keypoint, with
+// the copy among the strongest 9: the copy must not use up a slot.
+static void test_capacity_copies(void) {
+    enum { CAP = 200 };
+    static struct SiftKeyPoint full[CAP], part[CAP];
+    struct Mat                *img = texture(64, 80, 81u);
+    const int32_t              n   = sift_detect_compute(full, NULL, CAP, img, NULL);
+    CHECK(n > 9 && n < CAP);
+    for (int32_t k = 1; k <= n; k++) {
+        CHECK_EQ_INT(sift_detect_compute(part, NULL, k, img, NULL), k);
+        CHECK(memcmp(part, full, sizeof(full[0]) * (size_t)k) == 0);
+    }
+    free_mat(&img);
+}
+
+// sift_detect then sift_compute gives the bytes of sift_detect_compute, also
+// for a keypoint list in another order; without any octave -1 keypoint,
+// compute uses the image without the 2x upsample, as cv2.
+static void test_detect_then_compute(void) {
+    enum { CAP = 600 };
+    static struct SiftKeyPoint kd[CAP], kc[CAP], rev[CAP];
+    static uint8_t             dd[CAP][SIFT_DESC_BYTES], dc[CAP][SIFT_DESC_BYTES];
+    struct Mat                *img = texture(90, 70, 31u);
+    const int32_t              n   = sift_detect_compute(kd, dd, CAP, img, NULL);
+    CHECK(n > 20 && n < CAP);
+    CHECK_EQ_INT(sift_detect(kc, CAP, img, NULL), n);
+    CHECK(memcmp(kc, kd, sizeof(kd[0]) * (size_t)n) == 0);
+    for (int32_t i = 0; i < n; i++) {
+        rev[i] = kd[n - 1 - i];
+    }
+    sift_compute(dc, rev, n, img, NULL);
+    int32_t up = 0;
+    for (int32_t i = 0; i < n; i++) {
+        CHECK(memcmp(dc[i], dd[n - 1 - i], SIFT_DESC_BYTES) == 0);
+        up += kd[i].octave < 0;
+    }
+    CHECK(up > 0);
+    // Octave >= 0 only: same as a detection without upsample.
+    struct SiftParams p;
+    sift_default_params(&p);
+    p.upsample       = 0;
+    const int32_t m  = sift_detect_compute(kd, dd, CAP, img, &p);
+    CHECK(m > 5);
+    sift_compute(dc, kd, m, img, NULL);
+    CHECK(memcmp(dc, dd, SIFT_DESC_BYTES * (size_t)m) == 0);
+    sift_compute(dc, kd, 0, img, NULL);
     free_mat(&img);
 }
 
@@ -499,7 +659,7 @@ static void test_misuse(void) {
     p.n_octave_layers = SIFT_MAX_LAYERS + 1;
     EXPECT_ASSERT(sift_scratch_bytes(40, 40, &p));
     sift_default_params(&p);
-    p.sigma = 0.0f;
+    p.sigma = 0.0;
     EXPECT_ASSERT(sift_detect_compute(kps, NULL, 4, img, &p));
     sift_default_params(&p);
     p.edge_threshold = 0.0f;
@@ -507,6 +667,42 @@ static void test_misuse(void) {
     sift_default_params(&p);
     p.contrast_threshold = -0.1f;
     EXPECT_ASSERT(sift_detect_compute(kps, NULL, 4, img, &p));
+    p.contrast_threshold = INFINITY;
+    EXPECT_ASSERT(sift_detect_compute(kps, NULL, 4, img, &p));
+    p.contrast_threshold = NAN;
+    EXPECT_ASSERT(sift_detect_compute(kps, NULL, 4, img, &p));
+    sift_default_params(&p);
+    p.edge_threshold = INFINITY;
+    EXPECT_ASSERT(sift_detect_compute(kps, NULL, 4, img, &p));
+    sift_default_params(&p);
+    p.sigma = 1e-30;
+    EXPECT_ASSERT(sift_detect_compute(kps, NULL, 4, img, &p));
+    p.sigma = NAN;
+    EXPECT_ASSERT(sift_scratch_bytes(40, 40, &p));
+    EXPECT_ASSERT(sift_scratch_bytes(INT32_MAX / 2 + 1, 40, NULL));
+    struct SiftKeyPoint bad = {10.0f, 10.0f, 3.0f, 0.0f, 0.1f, 0, 1};
+    uint8_t             bd[1][SIFT_DESC_BYTES];
+    EXPECT_ASSERT(sift_compute(bd, &bad, -1, img, NULL));
+    EXPECT_ASSERT(sift_compute(NULL, &bad, 1, img, NULL));
+    bad.octave = -2;
+    EXPECT_ASSERT(sift_compute(bd, &bad, 1, img, NULL));
+    bad.octave = 9; // beyond the octaves of a 40 x 40 image
+    EXPECT_ASSERT(sift_compute(bd, &bad, 1, img, NULL));
+    bad.octave = 0;
+    bad.layer  = 6;
+    EXPECT_ASSERT(sift_compute(bd, &bad, 1, img, NULL));
+    bad.layer = 1;
+    bad.size  = NAN;
+    EXPECT_ASSERT(sift_compute(bd, &bad, 1, img, NULL));
+    bad.size  = 3.0f;
+    bad.angle = INFINITY;
+    EXPECT_ASSERT(sift_compute(bd, &bad, 1, img, NULL));
+    bad.angle = 0.0f;
+    bad.x     = NAN;
+    EXPECT_ASSERT(sift_compute(bd, &bad, 1, img, NULL));
+    struct Mat hollow = *img;
+    hollow.data       = NULL;
+    EXPECT_ASSERT(sift_detect_compute(kps, NULL, 4, &hollow, NULL));
     EXPECT_ASSERT(sift_scratch_bytes(-1, 40, NULL));
     EXPECT_ASSERT(sift_match(m, d, 1, d, 1, 0.0f));
     EXPECT_ASSERT(sift_match(m, d, 1, d, 1, 1.5f));
@@ -557,18 +753,24 @@ static void test_alloc_failure(void) {
 }
 
 int main(void) {
-    RUN_TEST(test_exp_accuracy);
+    RUN_TEST(test_pow2_cv);
+    RUN_TEST(test_solve3);
     RUN_TEST(test_atan2_accuracy);
-    RUN_TEST(test_sincos_accuracy);
+    RUN_TEST(test_sincos_cv);
     RUN_TEST(test_round_floor);
     RUN_TEST(test_reflect101);
     RUN_TEST(test_blur_sweep);
     RUN_TEST(test_octave_count);
     RUN_TEST(test_layer_sigmas);
+    RUN_TEST(test_exp_d);
+    RUN_TEST(test_exp_cv);
+    RUN_TEST(test_kernel_cv2);
     RUN_TEST(test_blob);
     RUN_TEST(test_rotate90);
     RUN_TEST(test_size_sweep);
     RUN_TEST(test_capacity_and_null_desc);
+    RUN_TEST(test_capacity_copies);
+    RUN_TEST(test_detect_then_compute);
     RUN_TEST(test_descriptor_norm);
     RUN_TEST(test_match_hand);
     RUN_TEST(test_match_random);
