@@ -60,8 +60,8 @@ static int is_corner(int d[16], const struct Mat *src, int x, int y, int t) {
     return has_run9(bmask) || has_run9(dmask);
 }
 
-// Largest threshold that still makes the point a corner: one less than the
-// weakest pixel of the best arc of 9, over both polarities.
+// Largest threshold that still makes the point a corner, minus 1: the best
+// arc of 9 by its weakest pixel, over both polarities.
 static int corner_score(const int d[16]) {
     int best = 0;
     for (int s = 0; s < 16; s++) {
@@ -95,7 +95,7 @@ static int32_t fast_nonmax(struct KeyPoint *kps, int32_t capacity,
 
 int32_t fast_detect(struct KeyPoint *kps, int32_t capacity,
                     const struct Mat *src, int threshold, int nonmax) {
-    ASSERT(src != NULL);
+    ASSERT(src != NULL && src->data != NULL);
     ASSERT(CV_MAT_TYPE(src->flags) == CV_8UC1);
     ASSERT(threshold >= 0 && threshold <= 255);
     ASSERT(capacity >= 0);
@@ -105,7 +105,6 @@ int32_t fast_detect(struct KeyPoint *kps, int32_t capacity,
     if (src->rows < 7 || src->cols < 7) {
         return 0;
     }
-    ASSERT(src->data != NULL);
     const int x_end = src->cols - 3; // exclusive
     const int y_end = src->rows - 3; // exclusive
     int       d[16];
@@ -307,7 +306,6 @@ static int round_q14(int32_t v) {
 // Sobel gradients over the 7x7 window centred on (x, y). The caller keeps the
 // window and its 1-pixel Sobel margin inside src.
 int64_t improc_harris_measure(const struct Mat *src, int x, int y) {
-    ASSERT(src != NULL);
     int32_t sxx = 0;
     int32_t syy = 0;
     int32_t sxy = 0;
@@ -336,7 +334,6 @@ int64_t improc_harris_measure(const struct Mat *src, int x, int y) {
 // radius-15 disc: the step whose (cos, sin) has the largest dot product with
 // it. Ties and a zero centroid give the lowest step.
 int32_t improc_orb_angle(const struct Mat *src, int x, int y) {
-    ASSERT(src != NULL);
     int32_t m10 = 0; // |m10|, |m01| <= 255 * 15 * 709 pixels < 2^22
     int32_t m01 = 0;
     for (int v = -ORB_PATCH_R; v <= ORB_PATCH_R; v++) {
@@ -384,7 +381,7 @@ static int orb_inside(const struct KeyPoint *kp, const struct Mat *m) {
 
 int32_t orb_detect(struct KeyPoint *kps, int32_t max_kps, const struct Mat *src,
                    int threshold) {
-    ASSERT(src != NULL);
+    ASSERT(src != NULL && src->data != NULL);
     ASSERT(CV_MAT_TYPE(src->flags) == CV_8UC1);
     ASSERT(threshold >= 0 && threshold <= 255);
     ASSERT(max_kps >= 0);
@@ -393,7 +390,6 @@ int32_t orb_detect(struct KeyPoint *kps, int32_t max_kps, const struct Mat *src,
         src->cols <= 2 * ORB_BORDER) {
         return 0;
     }
-    ASSERT(src->data != NULL);
     const int32_t n = fast_detect(NULL, 0, src, threshold, 1);
     if (n == 0) {
         return 0;
@@ -443,10 +439,9 @@ int32_t orb_detect(struct KeyPoint *kps, int32_t max_kps, const struct Mat *src,
 
 void orb_compute(uint8_t (*desc)[ORB_DESC_BYTES], const struct KeyPoint *kps,
                  int32_t n, const struct Mat *smooth) {
-    ASSERT(smooth != NULL);
+    ASSERT(smooth != NULL && smooth->data != NULL);
     ASSERT(CV_MAT_TYPE(smooth->flags) == CV_8UC1);
     ASSERT(n >= 0);
-    ASSERT(n == 0 || smooth->data != NULL);
     ASSERT(n == 0 || (desc != NULL && kps != NULL));
     for (int32_t i = 0; i < n; i++) {
         const struct KeyPoint *kp = &kps[i];
@@ -471,7 +466,8 @@ void orb_compute(uint8_t (*desc)[ORB_DESC_BYTES], const struct KeyPoint *kps,
     }
 }
 
-static inline int hamming_bits(const uint8_t *a, const uint8_t *b) {
+int hamming_distance(const uint8_t a[ORB_DESC_BYTES],
+                     const uint8_t b[ORB_DESC_BYTES]) {
     static const uint8_t nibble_bits[16] = {0, 1, 1, 2, 1, 2, 2, 3,
                                             1, 2, 2, 3, 2, 3, 3, 4};
     int                  d               = 0;
@@ -482,20 +478,14 @@ static inline int hamming_bits(const uint8_t *a, const uint8_t *b) {
     return d;
 }
 
-int hamming_distance(const uint8_t a[ORB_DESC_BYTES],
-                     const uint8_t b[ORB_DESC_BYTES]) {
-    ASSERT(a != NULL && b != NULL);
-    return hamming_bits(a, b);
-}
-
 // Index of the descriptor in set[0..n) closest to d; ties: lowest index.
 static int32_t closest(const uint8_t d[ORB_DESC_BYTES],
                        const uint8_t (*set)[ORB_DESC_BYTES], int32_t n,
                        int *dist) {
     int32_t best   = 0;
-    int     best_d = hamming_bits(d, set[0]);
+    int     best_d = hamming_distance(d, set[0]);
     for (int32_t j = 1; j < n; j++) {
-        const int dj = hamming_bits(d, set[j]);
+        const int dj = hamming_distance(d, set[j]);
         if (dj < best_d) {
             best_d = dj;
             best   = j;

@@ -661,8 +661,7 @@ void cvt_color(struct Mat *dst, const struct Mat *src, int code) {
         }
     }
     ASSERT(conv != NULL);
-    ASSERT(dst != NULL && src != NULL);
-    ASSERT(dst != src);
+    ASSERT(dst != src && dst->data != src->data);
     ASSERT(mat_type(src) == (size_t)CV_MAKETYPE(CV_8U, conv->scn));
     ASSERT(mat_type(dst) == (size_t)CV_MAKETYPE(CV_8U, conv->dcn));
     ASSERT(src->rows == dst->rows && src->cols == dst->cols);
@@ -670,7 +669,6 @@ void cvt_color(struct Mat *dst, const struct Mat *src, int code) {
     if (src->rows == 0 || src->cols == 0) {
         return;
     }
-    ASSERT(dst->data != src->data);
     for (int y = 0; y < src->rows; y++) {
         conv->kernel(mat_row(src, y), mat_row(dst, y), src->cols);
     }

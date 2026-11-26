@@ -29,7 +29,7 @@ struct KeyPoint {
 // 3 <= y <= rows - 4 are tested, so an image smaller than 7x7 has no corner.
 //
 // With nonmax != 0 the score of a corner is the largest threshold for which it
-// is still a corner (0..254), and a corner is kept only when its score
+// is still a corner, minus 1 (0..254), and a corner is kept only when its score
 // is strictly greater than the scores of all 8 neighbours (a pixel that is not
 // a corner counts as 0). Equal neighbours therefore suppress each other.
 //

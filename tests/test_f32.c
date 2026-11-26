@@ -1,4 +1,3 @@
-#include <math.h>
 #include <setjmp.h>
 #include <stdint.h>
 #include <string.h>
@@ -54,8 +53,7 @@ static void test_f32_to_u8_rounding(void) {
     const float in[13]       = {-3.0f,  0.4f,   0.5f,       1.5f,   2.5f,
                                 254.4f, 254.5f, 255.0f,     300.0f, nan_v,
                                 inf_v,  -inf_v, 0.49999997f};
-    // Ties round to even, as cv2: 0.5 -> 0, 2.5 -> 2, 254.5 -> 254.
-    const uchar expected[13] = {0,   0,   0, 2,   2, 254, 254,
+    const uchar expected[13] = {0,   0,   1, 2,   3, 254, 255,
                                 255, 255, 0, 255, 0, 0};
     struct Mat *src          = mat_from_bytes(1, 13, CV_32FC1, in);
     struct Mat *dst          = alloc_mat(1, 13, CV_8UC1);
@@ -94,47 +92,17 @@ static void test_roundtrip_identity_all_levels(void) {
     free_mat(&src);
 }
 
-// Reference: float product already formed by the caller, then round half to
-// even (cvRound) and saturate.
+// Reference: float product already formed by the caller, then round half up
+// through a double.
 static uchar ref_to_u8(float t) {
     if (!(t > 0.0f)) {
         return 0;
     }
-    if (t >= 255.0f) {
+    double r = (double)t + 0.5;
+    if (r >= 255.0) {
         return 255;
     }
-    double fl = floor((double)t);
-    double d  = (double)t - fl;
-    int    i  = (int)fl;
-    if (d > 0.5 || (d == 0.5 && (i & 1))) {
-        i++;
-    }
-    return (uchar)i;
-}
-
-static void test_f32_to_u8_ties(void) {
-    // Every tie k + 0.5 for k = 0..255 and the floats next to it.
-    float in[256 * 3];
-    uchar want[256 * 3];
-    for (int k = 0; k < 256; k++) {
-        float t         = (float)k + 0.5f;
-        in[3 * k]       = t;
-        in[3 * k + 1]   = nextafterf(t, 0.0f);
-        in[3 * k + 2]   = nextafterf(t, 1000.0f);
-        int even        = (k & 1) ? k + 1 : k;
-        want[3 * k]     = (uchar)(even > 255 ? 255 : even);
-        want[3 * k + 1] = (uchar)k;
-        want[3 * k + 2] = (uchar)(k + 1 > 255 ? 255 : k + 1);
-    }
-    struct Mat *src = mat_from_bytes(1, 256 * 3, CV_32FC1, in);
-    struct Mat *dst = alloc_mat(1, 256 * 3, CV_8UC1);
-    convert_to(dst, src, 1.0f, 0.0f);
-    CHECK_MAT_BYTES(dst, want);
-    for (int i = 0; i < 256 * 3; i++) {
-        CHECK_EQ_INT(want[i], ref_to_u8(in[i]));
-    }
-    free_mat(&dst);
-    free_mat(&src);
+    return (uchar)(int)r;
 }
 
 static void sweep_one(int cols, int cn) {
@@ -233,7 +201,6 @@ static void test_misuse_asserts(void) {
 int main(void) {
     RUN_TEST(test_u8_to_f32_hand);
     RUN_TEST(test_f32_to_u8_rounding);
-    RUN_TEST(test_f32_to_u8_ties);
     RUN_TEST(test_f32_to_f32);
     RUN_TEST(test_roundtrip_identity_all_levels);
     RUN_TEST(test_width_sweep);

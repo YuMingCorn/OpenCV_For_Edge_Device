@@ -83,7 +83,7 @@ static uint8_t             desc_b[KODAK_SIFT_MAX][SIFT_DESC_BYTES];
 static struct Mat *op_sift_kps(const struct Mat *rgb) {
     struct Mat   *half = op_half(rgb);
     const int32_t n =
-        sift_detect(kps_a, KODAK_SIFT_MAX, half, NULL);
+        sift_detect_compute(kps_a, NULL, KODAK_SIFT_MAX, half, NULL);
     struct Mat *out = alloc_mat(n > 0 ? n : 1, 7, CV_32FC1);
     memset(out->data, 0, (size_t)out->rows * out->step[0]);
     for (int32_t i = 0; i < n; i++) {

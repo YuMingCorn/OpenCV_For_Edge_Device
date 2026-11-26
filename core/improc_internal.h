@@ -49,12 +49,6 @@ int32_t improc_orb_angle(const struct Mat *src, int x, int y);
 void improc_resize_coord(int dx, int sw, int dw, int area, int clamp, int *x0,
                          uint16_t *a0, uint16_t *a1);
 
-// ---- equalize_hist level (hist.c), exposed for tests ----------------------
-
-// OpenCV's level saturate_cast<uchar>(sum * (255.f / den)) in float32, with
-// the rounding emulated in integers. 1 <= den <= 2^24, sum <= den.
-uint8_t improc_equalize_level(uint32_t sum, uint32_t den);
-
 // ---- 128-bit helpers for the exact Otsu comparison (hist.c) ----------------
 
 struct improc_u128 {

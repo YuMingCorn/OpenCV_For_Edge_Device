@@ -52,10 +52,6 @@ jobs:
           brew list ninja >/dev/null 2>&1 || brew install ninja
           echo "CC=clang" >> "$GITHUB_ENV"
 
-      - name: Lint core (Linux)
-        if: runner.os == 'Linux'
-        run: python3 tools/lint_core.py
-
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
 

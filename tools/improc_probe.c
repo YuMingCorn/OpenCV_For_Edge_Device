@@ -2,16 +2,14 @@
 //
 //   improc_probe <in.raw> <rows> <cols> <in_type> <out.raw> <op> [args]
 //
-// in_type: u8c1, u8c2, u8c3, u8c4, s16c1, s16c3, f32c1. The raw files hold the
-// rows back to back with no padding, in native byte order. Ops:
+// in_type: u8c1, u8c2, u8c3, u8c4, s16c1, s16c3. The raw files hold the rows
+// back to back with no padding, in native byte order. Ops:
 //
 //   cvt <CODE>                  CODE is a ColorConversionCodes name without
 //                               the COLOR_ prefix, e.g. RGB2GRAY
 //   scale <alpha_q8> <beta>     convert_scale (u8 in)
 //   scale_abs <alpha_q8> <beta> convert_scale_abs (s16 in)
 //   resize <dst_cols> <dst_rows> <nearest|linear|area>
-//   equalize                    equalize_hist (u8c1 in)
-//   to_u8                       convert_to u8 with alpha 1, beta 0 (f32c1 in)
 //
 // Exit status 0 on success, 2 on a usage or IO error.
 
@@ -53,12 +51,8 @@ static int parse_type(const char *s) {
     static const struct {
         const char *name;
         int         type;
-    } types[] = {{"u8c1", CV_8UC1},  {"u8c2", CV_8UC2},   {"u8c3", CV_8UC3},
-                 {"u8c4", CV_8UC4},  {"s16c1", CV_16SC1}, {"s16c3", CV_16SC3},
-#if IMPROC_HAS_FLOAT
-                 {"f32c1", CV_32FC1}
-#endif
-    };
+    } types[] = {{"u8c1", CV_8UC1}, {"u8c2", CV_8UC2},   {"u8c3", CV_8UC3},
+                 {"u8c4", CV_8UC4}, {"s16c1", CV_16SC1}, {"s16c3", CV_16SC3}};
     for (size_t i = 0; i < sizeof types / sizeof types[0]; i++) {
         if (strcmp(s, types[i].name) == 0) {
             return types[i].type;
@@ -136,20 +130,6 @@ static struct Mat *run_op(const struct Mat *src, int argc, char **argv) {
         resize(dst, src, interp);
         return dst;
     }
-    if (strcmp(op, "equalize") == 0 && argc == 1 &&
-        mat_type(src) == (size_t)CV_8UC1) {
-        struct Mat *dst = alloc_mat(src->rows, src->cols, CV_8UC1);
-        equalize_hist(dst, src);
-        return dst;
-    }
-#if IMPROC_HAS_FLOAT
-    if (strcmp(op, "to_u8") == 0 && argc == 1 &&
-        mat_type(src) == (size_t)CV_32FC1) {
-        struct Mat *dst = alloc_mat(src->rows, src->cols, CV_8UC1);
-        convert_to(dst, src, 1.0f, 0.0f);
-        return dst;
-    }
-#endif
     return NULL;
 }
 
