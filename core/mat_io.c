@@ -104,6 +104,7 @@ int mat_write(const char *filename, const struct Mat *mat) {
 }
 
 void mat_info(const struct Mat *mat) {
+    ASSERT(mat != NULL);
     printf("Size:              : [%d x %d]\n", (int)mat->rows, (int)mat->cols);
     printf("Channel num        : %d\n", (int)mat_channel_num(mat));
     printf("Channel size(byte) : %d\n", (int)mat_channel_size(mat));

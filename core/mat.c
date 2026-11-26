@@ -81,6 +81,8 @@ struct Mat *alloc_mat(int rows, int cols, int type) {
 }
 
 void mat_synthetic_pixel(int rows, int cols, int i, int j, uchar out[3]) {
+    ASSERT(out != NULL);
+    ASSERT(i >= 0 && i < rows && j >= 0 && j < cols);
     // 64-bit products: j * 255 overflows int32 for j > 8,421,504.
     int64_t w = cols > 1 ? (int64_t)cols - 1 : 1;
     int64_t h = rows > 1 ? (int64_t)rows - 1 : 1;
@@ -117,18 +119,27 @@ void *mat_at(const struct Mat *mat, int row, int col) {
     return (void *)(mat->data + mat->step[0] * row + mat->step[1] * col);
 }
 
-size_t mat_depth(const struct Mat *self) { return CV_MAT_DEPTH(self->flags); }
+size_t mat_depth(const struct Mat *self) {
+    ASSERT(self != NULL);
+    return CV_MAT_DEPTH(self->flags);
+}
 
 size_t mat_channel_size(const struct Mat *self) {
+    ASSERT(self != NULL);
     return CV_CH_SIZE(self->flags);
 }
 
 size_t mat_channel_num(const struct Mat *self) {
+    ASSERT(self != NULL);
     return CV_MAT_CN(self->flags);
 }
 
 size_t mat_pixel_size(const struct Mat *self) {
+    ASSERT(self != NULL);
     return CV_PIXEL_SIZE(self->flags);
 }
 
-size_t mat_type(const struct Mat *self) { return CV_MAT_TYPE(self->flags); }
+size_t mat_type(const struct Mat *self) {
+    ASSERT(self != NULL);
+    return CV_MAT_TYPE(self->flags);
+}

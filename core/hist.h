@@ -23,9 +23,11 @@ void calc_hist(uint32_t hist[256], const struct Mat *src);
 
 // Histogram equalization. src, dst: CV_8UC1, same size, distinct buffers.
 // m is the lowest non-empty level and den = total - hist[m]. When den == 0 the
-// image is copied. Otherwise lut[v] = 0 for v <= m and
-// lut[v] = (sum_v * 255 + den / 2) / den for v > m, where sum_v counts the
-// pixels in levels m + 1 .. v. Rounds half up.
+// image is copied. Otherwise lut[v] = 0 for v <= m and, for v > m,
+// lut[v] = round(sum_v * scale) with scale = 255.f / den, where sum_v counts
+// the pixels in levels m + 1 .. v. Both steps are float32 as in OpenCV and the
+// result rounds half to even, so the output equals cv2.equalizeHist. The
+// float32 rounding is emulated with integers: no FPU is needed.
 void equalize_hist(struct Mat *dst, const struct Mat *src);
 
 // Otsu threshold of a histogram with at most 2^24 pixels in total. Returns the
