@@ -30,8 +30,6 @@
 
 #define F_EPSILON 1.1920928955078125e-7f // FLT_EPSILON
 
-// ---- Portable float math ----------------------------------------------------
-
 // floor(v) for |v| < 2^31.
 static int32_t floor_i(float v) {
     int32_t i = (int32_t)v;
@@ -305,8 +303,6 @@ static float sincos_cv(float y, int32_t cos_) {
                    cos_ ? (int32_t)((uint32_t)n ^ 1u) : n);
 }
 
-// ---- Scale space ------------------------------------------------------------
-
 // A float image inside the scratch; rows are cols floats apart.
 struct fimg {
     float  *d;
@@ -537,8 +533,7 @@ size_t sift_scratch_bytes(int rows, int cols, const struct SiftParams *p) {
     return improc_scratch_mul(improc_scratch_add(images, extra), sizeof(float));
 }
 
-// ---- Keypoint store: min-heap on (response, detection order) ----------------
-
+// Keypoint store: min-heap on (response, detection order)
 struct store {
     struct SiftKeyPoint *kps;
     uint8_t (*desc)[SIFT_DESC_BYTES];
@@ -634,8 +629,6 @@ static void store_sort(struct store *st) {
         heap_down(st, 0, end);
     }
 }
-
-// ---- Detection --------------------------------------------------------------
 
 struct octave {
     struct fimg g[SIFT_MAX_LAYERS + 3]; // Gaussian images of this octave
@@ -1238,7 +1231,6 @@ void sift_compute(uint8_t (*desc)[SIFT_DESC_BYTES],
     cx.n_in    = n;
     scale_space(&cx, src, octaves, describe_given);
 }
-// ---- Matching ---------------------------------------------------------------
 
 static int32_t l2sq(const uint8_t *a, const uint8_t *b) {
     int32_t sum = 0;

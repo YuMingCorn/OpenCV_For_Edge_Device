@@ -15,7 +15,7 @@ SKIP = {"stb_image.h", "stb_image_write.h"}
 # Comment lines / total lines may only go down. Lower a ceiling after a
 # cleanup lands; never raise one.
 COMMENT_CEILING = {
-    ".c": 0.14,
+    ".c": 0.13,
     ".h": 0.75,
 }
 
